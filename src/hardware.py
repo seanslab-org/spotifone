@@ -13,6 +13,7 @@ import struct
 import logging
 import subprocess
 import os
+from typing import Optional
 from threading import Thread, Event
 
 logger = logging.getLogger(__name__)
@@ -162,7 +163,7 @@ class ALSAMic:
         self._source = None
         self._muted = True
 
-    def find_source(self) -> str | None:
+    def find_source(self) -> Optional[str]:
         try:
             result = subprocess.run(
                 ['pactl', 'list', 'sources', 'short'],

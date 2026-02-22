@@ -1,35 +1,35 @@
 #!/bin/bash
-# Deploy Spotifone to Car Thing via USB (CDC ECM network)
+# Deploy Spotifone to Car Thing via ADB
 #
-# Usage: ./deploy.sh [device_ip]
-# Default IP: 172.16.42.2 (USB gadget CDC ECM)
+# Usage: ./deploy.sh [adb_serial]
+# Default serial: 12345678
 
 set -e
 
-DEVICE_IP="${1:-172.16.42.2}"
-DEVICE_USER="root"
+SERIAL="${1:-12345678}"
 REMOTE_DIR="/opt/spotifone"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-echo "Deploying Spotifone to ${DEVICE_USER}@${DEVICE_IP}:${REMOTE_DIR}"
+echo "Deploying Spotifone to device ${SERIAL}:${REMOTE_DIR}"
 
-# Create remote directory
-ssh "${DEVICE_USER}@${DEVICE_IP}" "mkdir -p ${REMOTE_DIR}/{src,daemon}"
+# Create remote directories
+adb -s "$SERIAL" shell "mkdir -p ${REMOTE_DIR}/src ${REMOTE_DIR}/daemon"
 
-# Sync Python source
-scp -r "${PROJECT_DIR}/src/"*.py "${DEVICE_USER}@${DEVICE_IP}:${REMOTE_DIR}/src/"
+# Push Python source
+adb -s "$SERIAL" push "${PROJECT_DIR}/src/." "${REMOTE_DIR}/src/"
 
-# Sync systemd unit
-scp "${SCRIPT_DIR}/spotifone.service" "${DEVICE_USER}@${DEVICE_IP}:/etc/systemd/system/"
+# Push systemd unit
+adb -s "$SERIAL" push "${SCRIPT_DIR}/spotifone.service" "/etc/systemd/system/"
 
-# Build C daemons on device (if source changed)
-scp "${PROJECT_DIR}/daemon/"*.{c,h} "${PROJECT_DIR}/daemon/Makefile" \
-    "${DEVICE_USER}@${DEVICE_IP}:${REMOTE_DIR}/daemon/"
-ssh "${DEVICE_USER}@${DEVICE_IP}" "cd ${REMOTE_DIR}/daemon && make"
+# Push C daemon source (build on device)
+adb -s "$SERIAL" push "${PROJECT_DIR}/daemon/." "${REMOTE_DIR}/daemon/"
 
-# Install and enable service
-ssh "${DEVICE_USER}@${DEVICE_IP}" "systemctl daemon-reload && systemctl enable spotifone"
+# Enable service
+adb -s "$SERIAL" shell "systemctl daemon-reload && systemctl enable spotifone 2>/dev/null"
 
-echo "Deploy complete. Start with: ssh ${DEVICE_USER}@${DEVICE_IP} systemctl start spotifone"
+echo "Deploy complete."
+echo "  Start:   adb -s $SERIAL shell systemctl start spotifone"
+echo "  Status:  adb -s $SERIAL shell systemctl status spotifone"
+echo "  Logs:    adb -s $SERIAL shell journalctl -u spotifone -f"

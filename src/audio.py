@@ -6,6 +6,7 @@ Starts muted — PTT press unmutes, PTT release mutes.
 """
 
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ class AudioService:
     def __init__(self):
         self.running = False
         self.muted = True
-        self.device: str | None = None
+        self.device: Optional[str] = None
 
     def start(self) -> bool:
         self.running = True

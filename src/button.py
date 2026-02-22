@@ -10,6 +10,7 @@ Buttons produce three event types:
 
 import time
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ class ButtonState:
         self.press_time = time.time()
         return "press"
 
-    def release(self) -> str | None:
+    def release(self) -> Optional[str]:
         if not self.is_pressed:
             return None
         self.is_pressed = False
@@ -61,7 +62,7 @@ class ButtonHandler:
         if callback:
             self._callbacks[button_id] = callback
 
-    def on_event(self, button_id: int, pressed: bool) -> str | None:
+    def on_event(self, button_id: int, pressed: bool) -> Optional[str]:
         """Process a raw button event. Returns event type or None."""
         if button_id not in self._buttons:
             self.register(button_id)
