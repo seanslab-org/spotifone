@@ -89,6 +89,11 @@
 - [ ] Reboot test: verify boot logo renders during U-Boot stage
 - [ ] Full boot sequence test: boot logo → runtime framebuffer (seamless transition)
 
+## Open Bugs
+- [ ] **BUG: Runtime logo + background still shows color noise pixels** — fbcon unbind (vtcon0 glob) and `dd if=/dev/zero` pre-clear deployed but not fully effective. Noise persists in black areas around logo/text. Needs deeper investigation (possible double-buffer page flip, or another process writing to fb0 after setup_display.sh).
+- [ ] **BUG: Boot logo still shows old Spotify logo** — R5G6B5 `bootup.bmp` generated and flashed to `/dev/logo` partition, but U-Boot still renders old image on reboot. Possible causes: U-Boot reads from a different partition slot, BMP header not accepted by Amlogic parser, or logo partition not the active one (check env `logo=` param).
+- [ ] **BUG: No BT auto-reconnect on boot** — After reboot, previously paired devices don't auto-reconnect. Device is discoverable but host must manually re-connect. Need to implement auto-reconnect logic in bt_init.sh or a separate daemon (attempt `ConnectProfile` on known paired devices after BT stack is up).
+
 ## Acceptance Criteria
 - All unit tests pass (`python3 -m pytest tests/ -v`)
 - Clean module imports (tests import from src/, not from other test files)
