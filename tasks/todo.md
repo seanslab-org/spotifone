@@ -77,6 +77,18 @@
 - [ ] PTT button starts/stops streaming via control socket
 - [ ] Boot-to-ready automation
 
+## Phase 3: Display & Branding
+- [x] Create `convert_logo.py` — extract mic icon from horizontal logo, render vertical 480×800 layout
+- [x] Generate `logo.fb` (BGR888 for `/dev/fb0`) and `logo.png` (preview)
+- [x] Create `setup_display.sh` — unbind fbcon, clear fb, write logo to `/dev/fb0`
+- [x] Integrate into `bt_init.sh` Step 1b (display before BT bring-up)
+- [x] Update `deploy.sh` to push display assets
+- [x] Fix noisy framebuffer background (vtcon0 not vtcon1, add dd zero pre-clear)
+- [x] Generate `bootup.bmp` (16-bit R5G6B5) for Amlogic boot logo partition
+- [x] Flash boot logo to `/dev/logo` (replaces stock blue house)
+- [ ] Reboot test: verify boot logo renders during U-Boot stage
+- [ ] Full boot sequence test: boot logo → runtime framebuffer (seamless transition)
+
 ## Acceptance Criteria
 - All unit tests pass (`python3 -m pytest tests/ -v`)
 - Clean module imports (tests import from src/, not from other test files)

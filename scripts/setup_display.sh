@@ -11,14 +11,15 @@ if [ ! -f "$LOGO_FB" ]; then
     exit 0
 fi
 
-# Unbind fbcon so console text doesn't overwrite the logo
-if [ -f /sys/class/vtconsole/vtcon1/bind ]; then
-    echo 0 > /sys/class/vtconsole/vtcon1/bind 2>/dev/null
-fi
+# Unbind all fbcon vtconsoles so console text doesn't overwrite the logo
+for vt in /sys/class/vtconsole/vtcon*/bind; do
+    [ -f "$vt" ] && echo 0 > "$vt" 2>/dev/null
+done
 
 # Hide cursor
 echo -e '\033[?25l' > /dev/tty1 2>/dev/null
 
-# Write logo to framebuffer
+# Clear framebuffer to black, then write logo
+dd if=/dev/zero of=/dev/fb0 bs=1440 count=800 2>/dev/null
 cat "$LOGO_FB" > /dev/fb0
 echo "Display: Spotifone logo written to /dev/fb0"
