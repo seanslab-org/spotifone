@@ -1,7 +1,7 @@
 #!/bin/sh
 # Spotifone Bluetooth Initialization
 # Resets BCM4345C0 via GPIO, attaches UART, starts BlueZ stack,
-# launches mic_bridge (HFP audio) and button_listener (PTT).
+# and launches mic_bridge (HFP audio) in mic-only mode.
 #
 # Usage: /scripts/bt_init.sh
 # Runs as systemd service (bt-init.service)
@@ -56,8 +56,8 @@ else
 fi
 
 # Step 5: Start bluetoothd with SDP compat mode + input plugin disabled
-# -C = SDP compat (required for ProfileManager1 SDP registration)
-# -P input = disable BlueZ input plugin (frees L2CAP PSM 17/19 for our HID server)
+# -C = SDP compat (required for external ProfileManager1 SDP registration)
+# -P input = keep BlueZ input profiles disabled (mic-only mode, no keyboard/input path)
 if pgrep -x bluetoothd > /dev/null; then
     echo "bluetoothd already running"
 else
@@ -107,26 +107,21 @@ else
     echo "WARNING: mic_bridge binary not found at /opt/spotifone/daemon/mic_bridge"
 fi
 
-# Step 8: Start Classic BT HID keyboard server + pairing agent
-# Replaces BLE HOGP (run_all.py) with Classic BT HID (hid_keyboard.py)
-# Registers HID SDP via ProfileManager1, listens on L2CAP PSM 17+19
-start-stop-daemon --start --background \
-    --pidfile /var/run/spotifone.pid --make-pidfile \
-    --startas /bin/sh -- -c 'python3 /opt/spotifone/src/hid_keyboard.py > /tmp/spotifone.log 2>&1'
-sleep 3
-echo "HID keyboard server started"
+# Step 8: Enforce mic-only mode (disable all HID/button paths)
+# Stop any previously running keyboard/button services from older builds.
+start-stop-daemon --stop --pidfile /var/run/spotifone.pid --retry 1 > /dev/null 2>&1 || true
+start-stop-daemon --stop --pidfile /var/run/spotifone_btn.pid --retry 1 > /dev/null 2>&1 || true
+pkill -f '/opt/spotifone/src/hid_keyboard.py' 2>/dev/null || true
+pkill -f '/opt/spotifone/src/run_all.py' 2>/dev/null || true
+pkill -f '/opt/spotifone/src/button_listener.py' 2>/dev/null || true
+rm -f /var/run/spotifone.pid /var/run/spotifone_btn.pid /tmp/spotifone_hid.sock
+echo "Mic-only mode: HID keyboard and button listener disabled"
 
-# Enable Classic BT discoverability (needed for HID discovery via SDP)
+# Keep Classic discoverability/page scan enabled for HFP discovery and reconnect.
 hciconfig hci0 piscan
 echo "Classic BT discoverable (piscan)"
 
-# Step 9: Start button listener (button #1 → PTT + HID)
-start-stop-daemon --start --background \
-    --pidfile /var/run/spotifone_btn.pid --make-pidfile \
-    --startas /bin/sh -- -c 'python3 /opt/spotifone/src/button_listener.py > /tmp/button.log 2>&1'
-echo "Button listener started"
-
-# Step 10: Auto-reconnect to previously paired devices (background with retries)
+# Step 9: Auto-reconnect to previously paired devices (background with retries)
 # As an HFP headset, we initiate reconnection on boot. macOS does NOT auto-page
 # generic HFP devices — we must actively page the Mac. macOS page scan is
 # infrequent (~1.28s window every ~10s), so we need many retries over minutes.
