@@ -1,0 +1,13 @@
+[Unit]
+Description=Spotifone Bluetooth Initialization
+After=usbgadget.service
+Wants=usbgadget.service
+
+[Service]
+Type=simple
+ExecStart=/scripts/bt_init.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
