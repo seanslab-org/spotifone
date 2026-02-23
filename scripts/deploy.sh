@@ -34,13 +34,28 @@ adb -s "$SERIAL" push "${SCRIPT_DIR}/spotifone-dbus.conf" "/etc/dbus-1/system.d/
 # Push C daemon source + build script (for on-device compilation)
 adb -s "$SERIAL" push "${PROJECT_DIR}/daemon/." "${REMOTE_DIR}/daemon/"
 adb -s "$SERIAL" push "${SCRIPT_DIR}/build_mic_bridge.sh" "${REMOTE_DIR}/scripts/build_mic_bridge.sh"
+adb -s "$SERIAL" push "${SCRIPT_DIR}/build_hid_daemons.sh" "${REMOTE_DIR}/scripts/build_hid_daemons.sh"
 adb -s "$SERIAL" shell "chmod +x ${REMOTE_DIR}/scripts/build_mic_bridge.sh"
+adb -s "$SERIAL" shell "chmod +x ${REMOTE_DIR}/scripts/build_hid_daemons.sh"
 
 # Push mic_bridge binary if it exists (pre-compiled)
 if [ -f "${PROJECT_DIR}/daemon/mic_bridge" ]; then
     adb -s "$SERIAL" push "${PROJECT_DIR}/daemon/mic_bridge" "${REMOTE_DIR}/daemon/mic_bridge"
     adb -s "$SERIAL" shell "chmod +x ${REMOTE_DIR}/daemon/mic_bridge"
     echo "  mic_bridge binary deployed"
+fi
+
+# Push C HID binaries if they exist (pre-compiled)
+if [ -f "${PROJECT_DIR}/daemon/hid_keyboard" ]; then
+    adb -s "$SERIAL" push "${PROJECT_DIR}/daemon/hid_keyboard" "${REMOTE_DIR}/daemon/hid_keyboard"
+    adb -s "$SERIAL" shell "chmod +x ${REMOTE_DIR}/daemon/hid_keyboard"
+    echo "  hid_keyboard binary deployed"
+fi
+
+if [ -f "${PROJECT_DIR}/daemon/button_listener" ]; then
+    adb -s "$SERIAL" push "${PROJECT_DIR}/daemon/button_listener" "${REMOTE_DIR}/daemon/button_listener"
+    adb -s "$SERIAL" shell "chmod +x ${REMOTE_DIR}/daemon/button_listener"
+    echo "  button_listener binary deployed"
 fi
 
 # Flush writes to disk (prevents 0-byte files after unclean reboot)
@@ -50,5 +65,7 @@ echo ""
 echo "Deploy complete."
 echo "  BT init:    adb -s $SERIAL shell /scripts/bt_init.sh"
 echo "  Build mic:  adb -s $SERIAL shell 'cd ${REMOTE_DIR} && scripts/build_mic_bridge.sh'"
+echo "  Build HID:  adb -s $SERIAL shell 'cd ${REMOTE_DIR} && scripts/build_hid_daemons.sh'"
 echo "  Mic bridge: adb -s $SERIAL shell ${REMOTE_DIR}/daemon/mic_bridge"
-echo "  HID server: adb -s $SERIAL shell python3 ${REMOTE_DIR}/src/hid_keyboard.py"
+echo "  HID server: adb -s $SERIAL shell ${REMOTE_DIR}/daemon/hid_keyboard"
+echo "  Buttons:    adb -s $SERIAL shell ${REMOTE_DIR}/daemon/button_listener"

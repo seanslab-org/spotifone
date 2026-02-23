@@ -15,7 +15,7 @@ DBUS_LIBS   := $(shell pkg-config --libs dbus-1 2>/dev/null || echo "-ldbus-1")
 BT_LIBS     = -lbluetooth
 THREAD_LIBS = -lpthread
 
-TARGETS = gattd mic_bridge
+TARGETS = gattd mic_bridge hid_keyboard button_listener
 
 all: $(TARGETS)
 
@@ -26,6 +26,12 @@ SBC_LIBS    = -lsbc
 
 mic_bridge: mic_bridge.c protocol.h
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) -o $@ mic_bridge.c $(DBUS_LIBS) $(BT_LIBS) $(SBC_LIBS) $(THREAD_LIBS)
+
+hid_keyboard: hid_keyboard.c protocol.h
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) -o $@ hid_keyboard.c $(DBUS_LIBS) $(BT_LIBS)
+
+button_listener: button_listener.c
+	$(CC) $(CFLAGS) -o $@ button_listener.c
 
 clean:
 	rm -f $(TARGETS)

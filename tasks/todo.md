@@ -48,7 +48,10 @@
 - [ ] Test pairing with HID profile (on Mac)
 - [ ] Test HID report delivery — Right Alt press/release (on Mac)
 - [ ] Test button-to-Mac end-to-end (physical button → Mac key event)
-- [ ] Test HFP + HID coexistence (both profiles work simultaneously)
+- [x] Test HFP + HID coexistence (both profiles work simultaneously)
+  - [x] Fix: add `-P input` to combined-mode bluetoothd in bt_init.sh (was missing, BlueZ input plugin stole PSM 17/19)
+  - [x] Fix: remove agent registration from hid_keyboard.c (dual-agent conflict with mic_bridge)
+  - [x] Deploy and verify on device: reboot, check logs, re-pair, test both profiles — VERIFIED
 - [ ] Boot-to-ready automation (bt_init.sh → hid_keyboard.py on device startup)
 
 ## Phase 2b: Audio Bridging (HFP Mic)
