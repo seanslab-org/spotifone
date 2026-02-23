@@ -31,6 +31,11 @@ echo 1 > /sys/class/gpio/gpio${GPIOX_17}/value
 sleep 1
 echo "GPIO reset done"
 
+# Step 1b: Display Spotifone logo
+if [ -x /opt/spotifone/scripts/setup_display.sh ]; then
+    /opt/spotifone/scripts/setup_display.sh
+fi
+
 # Step 2: Attach UART with BCM firmware upload
 # btattach -P bcm uploads Cypress firmware (HCI 4.2→5.2)
 /usr/bin/btattach -P bcm -B /dev/ttyS1 &

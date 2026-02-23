@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 daemon/gattd
 daemon/mic_bridge
+logo.fb

@@ -28,6 +28,14 @@ adb -s "$SERIAL" push "${SCRIPT_DIR}/bt-init.service" "/etc/systemd/system/"
 adb -s "$SERIAL" push "${SCRIPT_DIR}/bt_init.sh" "/scripts/bt_init.sh"
 adb -s "$SERIAL" shell "chmod +x /scripts/bt_init.sh"
 
+# Push display assets
+if [ -f "${PROJECT_DIR}/logo.fb" ]; then
+    adb -s "$SERIAL" push "${PROJECT_DIR}/logo.fb" "${REMOTE_DIR}/logo.fb"
+    echo "  logo.fb deployed"
+fi
+adb -s "$SERIAL" push "${SCRIPT_DIR}/setup_display.sh" "${REMOTE_DIR}/scripts/setup_display.sh"
+adb -s "$SERIAL" shell "chmod +x ${REMOTE_DIR}/scripts/setup_display.sh"
+
 # Push D-Bus policy (allows mic_bridge to own org.spotifone.mic bus name)
 adb -s "$SERIAL" push "${SCRIPT_DIR}/spotifone-dbus.conf" "/etc/dbus-1/system.d/spotifone.conf"
 
