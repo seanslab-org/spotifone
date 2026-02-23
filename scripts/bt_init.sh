@@ -119,6 +119,58 @@ start-stop-daemon --start --background \
     --startas /bin/sh -- -c 'python3 /opt/spotifone/src/button_listener.py > /tmp/button.log 2>&1'
 echo "Button listener started"
 
+# Step 10: Auto-reconnect to previously paired devices (background with retries)
+# As an HFP headset, we initiate reconnection on boot. macOS does NOT auto-page
+# generic HFP devices — we must actively page the Mac. macOS page scan is
+# infrequent (~1.28s window every ~10s), so we need many retries over minutes.
+# Steps: set Trusted, increase page timeout, then retry Device1.Connect.
+ADAPTER_DIR="/var/lib/bluetooth/$(hciconfig hci0 2>/dev/null | grep 'BD Address' | awk '{print $3}')"
+(
+    sleep 3  # let mic_bridge finish profile registration
+
+    # Increase HCI page timeout (slots of 0.625ms; 16384 = ~10s scan window)
+    hciconfig hci0 pageto 16384 2>/dev/null
+
+    if [ -d "$ADAPTER_DIR" ]; then
+        for dev_dir in "$ADAPTER_DIR"/*/info; do
+            [ -f "$dev_dir" ] || continue
+            grep -q '\[LinkKey\]' "$dev_dir" || continue
+            DEV_MAC=$(basename "$(dirname "$dev_dir")")
+            DEV_DBUS=$(echo "$DEV_MAC" | tr ':' '_')
+            DEV_PATH="/org/bluez/hci0/dev_${DEV_DBUS}"
+            DEV_NAME=$(grep '^Name=' "$dev_dir" | cut -d= -f2)
+
+            # Mark device as trusted (BlueZ auto-accepts incoming connections)
+            dbus-send --system --print-reply --dest=org.bluez "$DEV_PATH" \
+                org.freedesktop.DBus.Properties.Set \
+                string:'org.bluez.Device1' string:'Trusted' \
+                variant:boolean:true >/dev/null 2>&1
+            echo "Set ${DEV_NAME:-$DEV_MAC} as trusted"
+
+            ATTEMPT=1
+            while [ "$ATTEMPT" -le 30 ]; do
+                # Check if already connected (Mac may have connected to us)
+                CONNECTED=$(dbus-send --system --print-reply --dest=org.bluez "$DEV_PATH" \
+                    org.freedesktop.DBus.Properties.Get \
+                    string:'org.bluez.Device1' string:'Connected' 2>/dev/null | grep boolean | awk '{print $3}')
+                if [ "$CONNECTED" = "true" ]; then
+                    echo "Already connected to ${DEV_NAME:-$DEV_MAC}"
+                    break
+                fi
+
+                echo "Reconnect attempt $ATTEMPT to ${DEV_NAME:-$DEV_MAC}"
+                if dbus-send --system --print-reply --dest=org.bluez "$DEV_PATH" \
+                    org.bluez.Device1.Connect >/dev/null 2>&1; then
+                    echo "Connected to ${DEV_NAME:-$DEV_MAC}"
+                    break
+                fi
+                ATTEMPT=$((ATTEMPT + 1))
+                sleep 10
+            done
+        done
+    fi
+) >> /tmp/bt_init.log 2>&1 &
+
 echo "$(date): bt_init.sh complete"
 
 # Keep btattach running (it maintains the UART connection)

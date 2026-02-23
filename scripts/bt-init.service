@@ -1,7 +1,7 @@
 [Unit]
 Description=Spotifone Bluetooth Initialization
+DefaultDependencies=no
 After=usbgadget.service
-Wants=usbgadget.service
 
 [Service]
 Type=simple
@@ -10,4 +10,4 @@ Restart=on-failure
 RestartSec=5
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=sysinit.target

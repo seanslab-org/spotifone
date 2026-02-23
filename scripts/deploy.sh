@@ -43,6 +43,9 @@ if [ -f "${PROJECT_DIR}/daemon/mic_bridge" ]; then
     echo "  mic_bridge binary deployed"
 fi
 
+# Flush writes to disk (prevents 0-byte files after unclean reboot)
+adb -s "$SERIAL" shell sync
+
 echo ""
 echo "Deploy complete."
 echo "  BT init:   adb -s $SERIAL shell /scripts/bt_init.sh"
