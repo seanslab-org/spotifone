@@ -33,9 +33,23 @@
 - [x] Test keystroke delivery via GATT notification (Right Alt press/release confirmed)
 - [x] Socket IPC for key event injection (/tmp/spotifone_hid.sock)
 - [x] Updated bt_init.sh: btattach -P bcm (firmware), btmgmt io-cap/advertising, noscan
-- [ ] Test live button detection (physical presses → socket → GATT → Mac)
 - [x] Wire physical button to send Right Alt (0xE6) via socket IPC (button_listener.py updated)
-- [ ] Boot-to-ready automation (bt_init.sh → run_all.py on device startup)
+- **BLE HOGP approach abandoned** — macOS address caching, dual-mode conflicts, never delivered key events reliably. See lesson #33.
+
+## Phase 2c: Classic BT HID Keyboard (replaces BLE HOGP)
+- [x] Create hid_keyboard.py — Classic BT HID server (L2CAP PSM 17+19, SDP via ProfileManager1)
+- [x] Modify bt_init.sh — `-P input` flag, start hid_keyboard.py instead of run_all.py, piscan
+- [x] Update deploy.sh — add HID server usage hint
+- [x] Update lessons.md — correct #19, add #33
+- [ ] Test `-P input` doesn't break HFP audio (on device)
+- [ ] Test L2CAP sockets bind to PSM 17+19 (on device)
+- [ ] Test SDP record registration visible via sdptool browse (on device)
+- [ ] Test Mac discovers HID profile on Spotifone (on Mac)
+- [ ] Test pairing with HID profile (on Mac)
+- [ ] Test HID report delivery — Right Alt press/release (on Mac)
+- [ ] Test button-to-Mac end-to-end (physical button → Mac key event)
+- [ ] Test HFP + HID coexistence (both profiles work simultaneously)
+- [ ] Boot-to-ready automation (bt_init.sh → hid_keyboard.py on device startup)
 
 ## Phase 2b: Audio Bridging (HFP Mic)
 - [x] Port VibeThing bt_mic_bridge.c → daemon/mic_bridge.c (1258-line HFP-HF daemon)

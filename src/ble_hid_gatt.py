@@ -301,6 +301,41 @@ class HIDService(Service):
         self.report_chrc.send_notification(report)
 
 
+class BatteryService(Service):
+    """Battery Service (0x180F) — required by macOS HOGP."""
+    UUID = '0000180f-0000-1000-8000-00805f9b34fb'
+
+    def __init__(self, bus, index):
+        super().__init__(bus, index, self.UUID, primary=True)
+        # Battery Level (read + notify), fixed at 100%
+        self.level_chrc = Characteristic(
+            bus, 0, '00002a19-0000-1000-8000-00805f9b34fb',
+            ['read', 'notify'], self)
+        self.level_chrc.value = dbus.Array([100], signature='y')
+        self.add_characteristic(self.level_chrc)
+
+
+class DeviceInfoService(Service):
+    """Device Information Service (0x180A) — required by macOS HOGP."""
+    UUID = '0000180a-0000-1000-8000-00805f9b34fb'
+
+    def __init__(self, bus, index):
+        super().__init__(bus, index, self.UUID, primary=True)
+        # Manufacturer Name
+        mfr = Characteristic(
+            bus, 0, '00002a29-0000-1000-8000-00805f9b34fb',
+            ['read'], self)
+        mfr.value = dbus.Array([ord(c) for c in 'Spotifone'], signature='y')
+        self.add_characteristic(mfr)
+        # PnP ID: vendor source=USB(0x02), vendor=0x05AC(Apple placeholder),
+        # product=0x0001, version=0x0001
+        pnp = Characteristic(
+            bus, 1, '00002a50-0000-1000-8000-00805f9b34fb',
+            ['read'], self)
+        pnp.value = dbus.Array([0x02, 0xAC, 0x05, 0x01, 0x00, 0x01, 0x00], signature='y')
+        self.add_characteristic(pnp)
+
+
 class BLEHIDServer:
     """BLE HID GATT server manager."""
 
@@ -310,6 +345,7 @@ class BLEHIDServer:
         self.adv = None
         self.hid_service = None
         self.bus = None
+        self._modifiers = 0  # Track modifier key state for combos (Shift+key etc.)
 
     def setup(self):
         dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
@@ -317,6 +353,8 @@ class BLEHIDServer:
         self.app = Application(self.bus)
         self.hid_service = HIDService(self.bus, 0)
         self.app.add_service(self.hid_service)
+        self.app.add_service(BatteryService(self.bus, 1))
+        self.app.add_service(DeviceInfoService(self.bus, 2))
         self.adv = Advertisement(self.bus)
 
     def register(self):
@@ -352,17 +390,21 @@ class BLEHIDServer:
             self._sock.close()
 
     def send_key_event(self, keycode, pressed):
-        """Send HID key event. Called from button handler."""
+        """Send HID key event. Tracks modifier state for combos (e.g. Shift+/)."""
         if not self.hid_service:
             return
-        if pressed:
-            if 0xE0 <= keycode <= 0xE7:
-                modifier = 1 << (keycode - 0xE0)
-                self.hid_service.send_key(modifier=modifier)
+        if 0xE0 <= keycode <= 0xE7:
+            bit = 1 << (keycode - 0xE0)
+            if pressed:
+                self._modifiers |= bit
             else:
-                self.hid_service.send_key(keycode=keycode)
+                self._modifiers &= ~bit
+            self.hid_service.send_key(modifier=self._modifiers)
         else:
-            self.hid_service.send_release()
+            if pressed:
+                self.hid_service.send_key(modifier=self._modifiers, keycode=keycode)
+            else:
+                self.hid_service.send_key(modifier=self._modifiers, keycode=0)
 
     def start_socket(self, path='/tmp/spotifone_hid.sock'):
         """Start UNIX socket for receiving key events from other processes."""

@@ -55,19 +55,20 @@ else
     echo "D-Bus already running"
 fi
 
-# Step 5: Start bluetoothd with SDP compat mode
+# Step 5: Start bluetoothd with SDP compat mode + input plugin disabled
+# -C = SDP compat (required for ProfileManager1 SDP registration)
+# -P input = disable BlueZ input plugin (frees L2CAP PSM 17/19 for our HID server)
 if pgrep -x bluetoothd > /dev/null; then
     echo "bluetoothd already running"
 else
-    start-stop-daemon --start --background --pidfile /var/run/bluetoothd.pid --make-pidfile --exec /usr/sbin/bluetoothd -- -n -C
+    start-stop-daemon --start --background --pidfile /var/run/bluetoothd.pid --make-pidfile --exec /usr/sbin/bluetoothd -- -n -C -P input
     sleep 2
-    echo "bluetoothd started"
+    echo "bluetoothd started (-C -P input)"
 fi
 
-# Step 5b: Set IO capability and enable advertising
+# Step 5b: Set IO capability for pairing
 btmgmt --index 0 io-cap 1
-btmgmt --index 0 advertising on
-echo "btmgmt: io-cap=DisplayOnly, advertising=on"
+echo "btmgmt: io-cap=DisplayOnly"
 
 # Step 6: Configure adapter via D-Bus
 dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0 \
@@ -106,12 +107,18 @@ else
     echo "WARNING: mic_bridge binary not found at /opt/spotifone/daemon/mic_bridge"
 fi
 
-# Step 8: Start GATT server + pairing agent (BLE HID — parked but keep running)
+# Step 8: Start Classic BT HID keyboard server + pairing agent
+# Replaces BLE HOGP (run_all.py) with Classic BT HID (hid_keyboard.py)
+# Registers HID SDP via ProfileManager1, listens on L2CAP PSM 17+19
 start-stop-daemon --start --background \
     --pidfile /var/run/spotifone.pid --make-pidfile \
-    --startas /bin/sh -- -c 'python3 /opt/spotifone/src/run_all.py > /tmp/spotifone.log 2>&1'
+    --startas /bin/sh -- -c 'python3 /opt/spotifone/src/hid_keyboard.py > /tmp/spotifone.log 2>&1'
 sleep 3
-echo "GATT server started"
+echo "HID keyboard server started"
+
+# Enable Classic BT discoverability (needed for HID discovery via SDP)
+hciconfig hci0 piscan
+echo "Classic BT discoverable (piscan)"
 
 # Step 9: Start button listener (button #1 → PTT + HID)
 start-stop-daemon --start --background \

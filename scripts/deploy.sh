@@ -48,6 +48,7 @@ adb -s "$SERIAL" shell sync
 
 echo ""
 echo "Deploy complete."
-echo "  BT init:   adb -s $SERIAL shell /scripts/bt_init.sh"
+echo "  BT init:    adb -s $SERIAL shell /scripts/bt_init.sh"
 echo "  Build mic:  adb -s $SERIAL shell 'cd ${REMOTE_DIR} && scripts/build_mic_bridge.sh'"
 echo "  Mic bridge: adb -s $SERIAL shell ${REMOTE_DIR}/daemon/mic_bridge"
+echo "  HID server: adb -s $SERIAL shell python3 ${REMOTE_DIR}/src/hid_keyboard.py"
