@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Convert logo.jpeg to a vertical boot screen for Car Thing display.
+"""Convert logo.jpeg to boot screen assets for Car Thing display.
 
-Extracts the mic icon from logo.jpeg, places it centered on the upper
-portion of a 480x800 black canvas, and draws "Spotifone" + tagline text
-below. Output is raw BGR888 for the framebuffer.
+Generates two outputs from the same vertical layout:
+  1. logo.fb  — raw BGR888 for runtime framebuffer (/dev/fb0)
+  2. bootup.bmp — 16-bit R5G6B5 BMP for Amlogic boot logo partition
 
 Framebuffer: 480x800, 24bpp BGR888.
-Output: logo.fb (480 * 800 * 3 = 1,152,000 bytes).
+Boot BMP: 480x800, 16bpp R5G6B5 (GIMP-style "Advanced Options, 16bits R5 G6 B5").
 
 Usage:
     python3 scripts/convert_logo.py [input.jpeg] [output.fb]
 """
 
+import struct
 import sys
 from pathlib import Path
 
@@ -97,7 +98,60 @@ def rgb_to_bgr_bytes(canvas: Image.Image) -> bytes:
     return bgr.tobytes()
 
 
-def convert_logo(input_path: str, output_path: str) -> None:
+def save_r5g6b5_bmp(canvas: Image.Image, path: str) -> None:
+    """Save image as 16-bit R5G6B5 BMP (Amlogic boot logo format).
+
+    BMP with BITMAPINFOHEADER + BI_BITFIELDS masks for R5G6B5.
+    Bottom-up row order (standard BMP).
+    """
+    w, h = canvas.size
+    row_bytes = w * 2
+    # BMP rows padded to 4-byte boundary
+    row_pad = (4 - (row_bytes % 4)) % 4
+    stride = row_bytes + row_pad
+
+    # Pixel data size
+    pixel_size = stride * h
+
+    # Header sizes: 14 (file hdr) + 40 (info hdr) + 12 (3x DWORD masks)
+    hdr_size = 14 + 40 + 12
+    file_size = hdr_size + pixel_size
+
+    buf = bytearray()
+
+    # BITMAPFILEHEADER (14 bytes)
+    buf += struct.pack('<2sIHHI', b'BM', file_size, 0, 0, hdr_size)
+
+    # BITMAPINFOHEADER (40 bytes)
+    buf += struct.pack('<IiiHHIIiiII',
+                       40,          # biSize
+                       w,           # biWidth
+                       h,           # biHeight (positive = bottom-up)
+                       1,           # biPlanes
+                       16,          # biBitCount
+                       3,           # biCompression = BI_BITFIELDS
+                       pixel_size,  # biSizeImage
+                       0, 0,        # biXPelsPerMeter, biYPelsPerMeter
+                       0, 0)        # biClrUsed, biClrImportant
+
+    # Color masks: R5 G6 B5
+    buf += struct.pack('<III', 0xF800, 0x07E0, 0x001F)
+
+    # Pixel data (bottom-up)
+    pixels = canvas.load()
+    for y in range(h - 1, -1, -1):
+        for x in range(w):
+            r, g, b = pixels[x, y][:3]
+            val = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
+            buf += struct.pack('<H', val)
+        buf += b'\x00' * row_pad
+
+    Path(path).write_bytes(bytes(buf))
+    print(f"Boot BMP: {path} ({len(buf)} bytes, {w}x{h} R5G6B5)")
+
+
+def render_canvas(input_path: str) -> Image.Image:
+    """Render the vertical boot screen canvas from the source logo."""
     img = Image.open(input_path).convert("RGB")
     print(f"Input: {img.size[0]}x{img.size[1]}")
 
@@ -113,7 +167,6 @@ def convert_logo(input_path: str, output_path: str) -> None:
 
     # Paste icon centered horizontally
     icon_x = (FB_WIDTH - ICON_WIDTH) // 2
-    # Composite RGBA icon onto RGB canvas (handles transparency)
     canvas.paste(icon, (icon_x, ICON_Y), icon)
     print(f"Icon placed at ({icon_x}, {ICON_Y})")
 
@@ -123,7 +176,6 @@ def convert_logo(input_path: str, output_path: str) -> None:
     title_font = find_font(64, bold=True)
     tagline_font = find_font(28)
 
-    # "Spotifone" — centered
     title_text = "Spotifone"
     title_bbox = draw.textbbox((0, 0), title_text, font=title_font)
     title_w = title_bbox[2] - title_bbox[0]
@@ -131,7 +183,6 @@ def convert_logo(input_path: str, output_path: str) -> None:
     draw.text((title_x, TITLE_Y), title_text, fill=TITLE_COLOR, font=title_font)
     print(f"Title at ({title_x}, {TITLE_Y}), width={title_w}")
 
-    # "Music · Voice · Connected" — centered
     tagline_text = "Music \u00b7 Voice \u00b7 Connected"
     tag_bbox = draw.textbbox((0, 0), tagline_text, font=tagline_font)
     tag_w = tag_bbox[2] - tag_bbox[0]
@@ -139,15 +190,25 @@ def convert_logo(input_path: str, output_path: str) -> None:
     draw.text((tag_x, TAGLINE_Y), tagline_text, fill=TAGLINE_COLOR, font=tagline_font)
     print(f"Tagline at ({tag_x}, {TAGLINE_Y}), width={tag_w}")
 
-    # Save a preview PNG for verification
+    return canvas
+
+
+def convert_logo(input_path: str, output_path: str) -> None:
+    canvas = render_canvas(input_path)
+
+    # Save preview PNG
     preview_path = Path(output_path).with_suffix(".png")
     canvas.save(str(preview_path))
     print(f"Preview: {preview_path}")
 
-    # Convert to BGR888 and write
+    # Runtime framebuffer: BGR888
     bgr_data = rgb_to_bgr_bytes(canvas)
     Path(output_path).write_bytes(bgr_data)
     print(f"Output: {output_path} ({len(bgr_data)} bytes)")
+
+    # Boot logo: 16-bit R5G6B5 BMP for Amlogic logo partition
+    bmp_path = str(Path(output_path).with_name("bootup.bmp"))
+    save_r5g6b5_bmp(canvas, bmp_path)
 
 
 if __name__ == "__main__":
