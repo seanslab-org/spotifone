@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Convert logo.jpeg to boot screen assets for Car Thing display.
+"""Generate text-only boot/background assets for Car Thing display.
 
-Generates two outputs from the same vertical layout:
-  1. logo.fb  — raw BGR888 for runtime framebuffer (/dev/fb0)
-  2. bootup.bmp — 16-bit R5G6B5 BMP for Amlogic boot logo partition
+Design goal: walkie.sh-inspired, text-first UI with Spotifone purple accent.
+No icon/bitmap art; just styled text blocks.
 
-Framebuffer: 480x800, 24bpp BGR888.
-Boot BMP: 480x800, 16bpp R5G6B5 (GIMP-style "Advanced Options, 16bits R5 G6 B5").
+Outputs:
+  1) logo.fb    — raw BGR888 for runtime framebuffer (/dev/fb0), 480x800
+  2) bootup.bmp — 16-bit R5G6B5 BMP for Amlogic /dev/logo partition, 480x800
 
 Usage:
-    python3 scripts/convert_logo.py [input.jpeg] [output.fb]
+    python3 scripts/convert_logo.py [output.fb]
 """
 
 import struct
@@ -24,78 +24,61 @@ except ImportError:
 
 FB_WIDTH = 480
 FB_HEIGHT = 800
-BPP = 3  # 24-bit BGR888
+BPP = 4  # 32-bit BGRA8888
 
-# Layout constants
-ICON_WIDTH = 220
-ICON_Y = 150  # Top of icon
-TITLE_Y = 480
-TAGLINE_Y = 555
-TITLE_COLOR = (255, 255, 255)      # White
-TAGLINE_COLOR = (130, 130, 130)    # Gray
-BG_COLOR = (0, 0, 0)              # Black
+# Walkie-inspired palette (RGB tuples for Pillow)
+BG = (0x0A, 0x0A, 0x0A)       # #0a0a0a
+SURFACE = (0x14, 0x14, 0x14)  # #141414
+BORDER = (0x22, 0x22, 0x22)   # #222222
+TEXT = (0xE0, 0xE0, 0xE0)     # #e0e0e0
+MUTED = (0x88, 0x88, 0x88)    # #888888
+ACCENT = (0x6E, 0x56, 0xCF)   # #6E56CF (Spotifone purple)
 
-# Font paths (macOS system fonts, with fallbacks)
-FONT_PATHS = [
+# Font paths (macOS system fonts, with fallbacks).
+SANS_FONT_PATHS = [
     "/System/Library/Fonts/Helvetica.ttc",
     "/System/Library/Fonts/HelveticaNeue.ttc",
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
 ]
+MONO_FONT_PATHS = [
+    "/System/Library/Fonts/SFNSMono.ttf",
+    "/System/Library/Fonts/Supplemental/Menlo.ttc",
+    "/System/Library/Fonts/Supplemental/Courier New.ttf",
+]
 
 
-def find_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    """Find a usable system font, falling back to Pillow default."""
-    for path in FONT_PATHS:
+def find_font(paths: list[str], size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont:
+    """Find a usable system font, falling back to Pillow default.
+
+    Note: .ttc collections may have multiple faces; we try index=1 for bold.
+    """
+    for path in paths:
         try:
-            # .ttc files have multiple faces; index 0 = regular, 1 = bold
             index = 1 if bold and path.endswith(".ttc") else 0
             return ImageFont.truetype(path, size, index=index)
         except (OSError, IndexError):
             continue
-    # Last resort: Pillow default (bitmap, ignores size param)
     print("WARNING: No system font found, using Pillow default")
     return ImageFont.load_default()
 
 
-def crop_icon(img: Image.Image) -> Image.Image:
-    """Crop the mic icon from the left portion of the logo.
+def _center_x(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont) -> int:
+    bbox = draw.textbbox((0, 0), text, font=font)
+    w = bbox[2] - bbox[0]
+    return (FB_WIDTH - w) // 2
 
-    The logo is a horizontal layout: mic icon on left ~40%, text on right.
-    We crop the icon region, remove the white background, and trim.
+
+def rgb_to_bgra_bytes(canvas: Image.Image) -> bytes:
+    """Convert RGB Pillow image to BGRA8888 raw bytes (alpha=0xFF).
+
+    The Amlogic S905D2 OSD driver needs 32bpp with explicit alpha; 24bpp
+    leaves alpha bits undefined which shows as pixel noise on the panel.
     """
-    # Crop left 33% where the mic icon lives (avoid text bleed from right)
-    icon_region = img.crop((0, 0, int(img.width * 0.33), img.height))
-
-    # Convert to RGBA and build alpha mask from luminance
-    # White/near-white pixels (R>220 AND G>220 AND B>220) become transparent
-    icon_rgba = icon_region.convert("RGBA")
-    r, g, b, a = icon_rgba.split()
-
-    # Create mask: 0 where all channels > 220 (white bg), 255 elsewhere
-    # Use point() for fast per-channel thresholding (no Python loop)
-    r_mask = r.point(lambda v: 0 if v > 220 else 255)
-    g_mask = g.point(lambda v: 0 if v > 220 else 255)
-    b_mask = b.point(lambda v: 0 if v > 220 else 255)
-
-    # Combine: pixel is opaque only if ANY channel is <= 220
-    from PIL import ImageChops
-    alpha = ImageChops.lighter(ImageChops.lighter(r_mask, g_mask), b_mask)
-    icon_rgba.putalpha(alpha)
-
-    # Trim transparent edges
-    bbox = icon_rgba.getbbox()
-    if bbox:
-        icon_rgba = icon_rgba.crop(bbox)
-
-    return icon_rgba
-
-
-def rgb_to_bgr_bytes(canvas: Image.Image) -> bytes:
-    """Convert RGB Pillow image to BGR888 raw bytes using channel swap."""
     r, g, b = canvas.split()
-    bgr = Image.merge("RGB", (b, g, r))
-    return bgr.tobytes()
+    a = Image.new("L", canvas.size, 255)
+    bgra = Image.merge("RGBA", (b, g, r, a))
+    return bgra.tobytes()
 
 
 def save_r5g6b5_bmp(canvas: Image.Image, path: str) -> None:
@@ -150,61 +133,74 @@ def save_r5g6b5_bmp(canvas: Image.Image, path: str) -> None:
     print(f"Boot BMP: {path} ({len(buf)} bytes, {w}x{h} R5G6B5)")
 
 
-def render_canvas(input_path: str) -> Image.Image:
-    """Render the vertical boot screen canvas from the source logo."""
-    img = Image.open(input_path).convert("RGB")
-    print(f"Input: {img.size[0]}x{img.size[1]}")
-
-    # Extract and scale mic icon
-    icon = crop_icon(img)
-    scale = ICON_WIDTH / icon.width
-    icon_h = int(icon.height * scale)
-    icon = icon.resize((ICON_WIDTH, icon_h), Image.LANCZOS)
-    print(f"Icon: {ICON_WIDTH}x{icon_h}")
-
-    # Create black canvas
-    canvas = Image.new("RGB", (FB_WIDTH, FB_HEIGHT), BG_COLOR)
-
-    # Paste icon centered horizontally
-    icon_x = (FB_WIDTH - ICON_WIDTH) // 2
-    canvas.paste(icon, (icon_x, ICON_Y), icon)
-    print(f"Icon placed at ({icon_x}, {ICON_Y})")
-
-    # Draw text
+def render_canvas() -> Image.Image:
+    """Render the 480x800 text-only boot/background canvas."""
+    canvas = Image.new("RGB", (FB_WIDTH, FB_HEIGHT), BG)
     draw = ImageDraw.Draw(canvas)
 
-    title_font = find_font(64, bold=True)
-    tagline_font = find_font(28)
+    # Top accent rule (matches menu header)
+    draw.rectangle((0, 0, FB_WIDTH, 6), fill=ACCENT)
 
-    title_text = "Spotifone"
-    title_bbox = draw.textbbox((0, 0), title_text, font=title_font)
-    title_w = title_bbox[2] - title_bbox[0]
+    title_font = find_font(SANS_FONT_PATHS, 74, bold=True)
+    tagline_font = find_font(SANS_FONT_PATHS, 26, bold=False)
+    mono_font = find_font(MONO_FONT_PATHS, 22, bold=False)
+    small_font = find_font(SANS_FONT_PATHS, 20, bold=False)
+
+    # Hero title with purple accent on "one" (walkie-style span)
+    left = "spotif"
+    right = "one"
+    left_bbox = draw.textbbox((0, 0), left, font=title_font)
+    right_bbox = draw.textbbox((0, 0), right, font=title_font)
+    title_w = (left_bbox[2] - left_bbox[0]) + (right_bbox[2] - right_bbox[0])
     title_x = (FB_WIDTH - title_w) // 2
-    draw.text((title_x, TITLE_Y), title_text, fill=TITLE_COLOR, font=title_font)
-    print(f"Title at ({title_x}, {TITLE_Y}), width={title_w}")
+    title_y = 135
+    draw.text((title_x, title_y), left, fill=TEXT, font=title_font)
+    draw.text((title_x + (left_bbox[2] - left_bbox[0]), title_y), right, fill=ACCENT, font=title_font)
 
-    tagline_text = "Music \u00b7 Voice \u00b7 Connected"
-    tag_bbox = draw.textbbox((0, 0), tagline_text, font=tagline_font)
-    tag_w = tag_bbox[2] - tag_bbox[0]
-    tag_x = (FB_WIDTH - tag_w) // 2
-    draw.text((tag_x, TAGLINE_Y), tagline_text, fill=TAGLINE_COLOR, font=tagline_font)
-    print(f"Tagline at ({tag_x}, {TAGLINE_Y}), width={tag_w}")
+    # Tagline (centered, muted)
+    tagline_1 = "bluetooth mic + keyboard."
+    tagline_2 = "no setup. just talk."
+    draw.text((_center_x(draw, tagline_1, tagline_font), 235), tagline_1, fill=MUTED, font=tagline_font)
+    draw.text((_center_x(draw, tagline_2, tagline_font), 268), tagline_2, fill=MUTED, font=tagline_font)
+
+    # "Install box" equivalent with key hints (monospace)
+    box_w = 420
+    box_h = 140
+    box_x0 = (FB_WIDTH - box_w) // 2
+    box_y0 = 340
+    draw.rectangle((box_x0, box_y0, box_x0 + box_w, box_y0 + box_h), fill=SURFACE, outline=BORDER, width=1)
+    # Small accent rule inside the box
+    draw.rectangle((box_x0, box_y0, box_x0 + box_w, box_y0 + 4), fill=ACCENT)
+
+    hints = [
+        "$ mute  -> menu",
+        "$ wheel -> app switch",
+        "$ round -> ptt",
+    ]
+    hy = box_y0 + 28
+    for line in hints:
+        draw.text((box_x0 + 22, hy), line, fill=TEXT, font=mono_font)
+        hy += 34
+
+    # Footer (muted)
+    footer = "https://seanslab.org"
+    draw.text((_center_x(draw, footer, small_font), 710), footer, fill=MUTED, font=small_font)
 
     return canvas
 
 
-def convert_logo(input_path: str, output_path: str) -> None:
-    canvas = render_canvas(input_path)
+def convert_logo(output_path: str) -> None:
+    canvas = render_canvas()
 
     # Save preview PNG
     preview_path = Path(output_path).with_suffix(".png")
     canvas.save(str(preview_path))
     print(f"Preview: {preview_path}")
 
-    # Runtime framebuffer: BGR888
-    bgr_data = rgb_to_bgr_bytes(canvas)
-    Path(output_path).write_bytes(bgr_data)
-    print(f"Output: {output_path} ({len(bgr_data)} bytes)")
+    # Runtime framebuffer: BGRA8888
+    bgra_data = rgb_to_bgra_bytes(canvas)
+    Path(output_path).write_bytes(bgra_data)
+    print(f"Output: {output_path} ({len(bgra_data)} bytes)")
 
     # Boot logo: 16-bit R5G6B5 BMP for Amlogic logo partition
     bmp_path = str(Path(output_path).with_name("bootup.bmp"))
@@ -213,6 +209,5 @@ def convert_logo(input_path: str, output_path: str) -> None:
 
 if __name__ == "__main__":
     project_dir = Path(__file__).resolve().parent.parent
-    input_file = sys.argv[1] if len(sys.argv) > 1 else str(project_dir / "logo.jpeg")
-    output_file = sys.argv[2] if len(sys.argv) > 2 else str(project_dir / "logo.fb")
-    convert_logo(input_file, output_file)
+    output_file = sys.argv[1] if len(sys.argv) > 1 else str(project_dir / "logo.fb")
+    convert_logo(output_file)
