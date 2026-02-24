@@ -189,6 +189,28 @@ def render_canvas() -> Image.Image:
     return canvas
 
 
+def render_boot_canvas() -> Image.Image:
+    """Render the 480x800 boot splash — centered 'spotifone' only."""
+    canvas = Image.new("RGB", (FB_WIDTH, FB_HEIGHT), BG)
+    draw = ImageDraw.Draw(canvas)
+
+    title_font = find_font(SANS_FONT_PATHS, 74, bold=True)
+
+    left = "spotif"
+    right = "one"
+    left_bbox = draw.textbbox((0, 0), left, font=title_font)
+    right_bbox = draw.textbbox((0, 0), right, font=title_font)
+    left_w = left_bbox[2] - left_bbox[0]
+    title_w = left_w + (right_bbox[2] - right_bbox[0])
+    title_h = max(left_bbox[3] - left_bbox[1], right_bbox[3] - right_bbox[1])
+    title_x = (FB_WIDTH - title_w) // 2
+    title_y = (FB_HEIGHT - title_h) // 2
+    draw.text((title_x, title_y), left, fill=TEXT, font=title_font)
+    draw.text((title_x + left_w, title_y), right, fill=ACCENT, font=title_font)
+
+    return canvas
+
+
 def convert_logo(output_path: str) -> None:
     canvas = render_canvas()
 
@@ -202,9 +224,10 @@ def convert_logo(output_path: str) -> None:
     Path(output_path).write_bytes(bgra_data)
     print(f"Output: {output_path} ({len(bgra_data)} bytes)")
 
-    # Boot logo: 16-bit R5G6B5 BMP for Amlogic logo partition
+    # Boot logo: separate minimal canvas for Amlogic logo partition
+    boot_canvas = render_boot_canvas()
     bmp_path = str(Path(output_path).with_name("bootup.bmp"))
-    save_r5g6b5_bmp(canvas, bmp_path)
+    save_r5g6b5_bmp(boot_canvas, bmp_path)
 
 
 if __name__ == "__main__":
