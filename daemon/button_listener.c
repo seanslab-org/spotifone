@@ -41,10 +41,17 @@
 
 #define ROUND_BUTTON_CODE 1
 #define PRESET_1_CODE 2
+#define PRESET_2_CODE 3
+#define PRESET_3_CODE 4
+#define PRESET_4_CODE 5
 #define KNOB_CLICK_CODE 28
 
 #define HID_RIGHT_ALT 0xE6
-#define HID_KEY_9 0x26
+#define HID_LEFT_ARROW 0x50
+#define HID_RIGHT_ARROW 0x4F
+#define HID_ENTER 0x28
+/* macOS "Delete" key is Backspace (delete backwards). */
+#define HID_BACKSPACE 0x2A
 #define HID_LEFT_SHIFT 0xE1
 #define HID_LEFT_GUI 0xE3 /* macOS Command key */
 #define HID_TAB 0x2B
@@ -208,7 +215,7 @@ int main(void) {
         log_info("Listening on /dev/input/event1 (knob)");
     }
     log_info("Round button -> Right Alt (0xE6) + PTT");
-    log_info("Preset #1 -> key '9'");
+    log_info("Preset #1-4 -> Left / Right / Enter / Delete");
     log_info("Knob click -> macOS app switcher (Cmd+Tab hold, rotate=Tab, click=release)");
 
     while (g_running) {
@@ -271,9 +278,30 @@ int main(void) {
                             send_mic_cmd(mic_sock, &mic_addr, MIC_CMD_STOP);
                             log_info("Round button release -> Right Alt UP + PTT STOP");
                         }
-                    } else if (ev.code == PRESET_1_CODE && ev.value == 1) {
-                        send_tap(hid_sock, &hid_addr, HID_KEY_9);
-                        log_info("Preset #1 press -> sent key '9'");
+                    } else if (ev.code == PRESET_1_CODE) {
+                        if (ev.value == 1) {
+                            (void)send_hid_event(hid_sock, &hid_addr, HID_LEFT_ARROW, 1);
+                        } else if (ev.value == 0) {
+                            (void)send_hid_event(hid_sock, &hid_addr, HID_LEFT_ARROW, 0);
+                        }
+                    } else if (ev.code == PRESET_2_CODE) {
+                        if (ev.value == 1) {
+                            (void)send_hid_event(hid_sock, &hid_addr, HID_RIGHT_ARROW, 1);
+                        } else if (ev.value == 0) {
+                            (void)send_hid_event(hid_sock, &hid_addr, HID_RIGHT_ARROW, 0);
+                        }
+                    } else if (ev.code == PRESET_3_CODE) {
+                        if (ev.value == 1) {
+                            (void)send_hid_event(hid_sock, &hid_addr, HID_ENTER, 1);
+                        } else if (ev.value == 0) {
+                            (void)send_hid_event(hid_sock, &hid_addr, HID_ENTER, 0);
+                        }
+                    } else if (ev.code == PRESET_4_CODE) {
+                        if (ev.value == 1) {
+                            (void)send_hid_event(hid_sock, &hid_addr, HID_BACKSPACE, 1);
+                        } else if (ev.value == 0) {
+                            (void)send_hid_event(hid_sock, &hid_addr, HID_BACKSPACE, 0);
+                        }
                     } else if (ev.code == KNOB_CLICK_CODE && ev.value == 1) {
                         long long now = monotonic_ms();
                         if (now - knob_click_last_ms >= KNOB_CLICK_DEBOUNCE_MS) {
@@ -324,6 +352,10 @@ int main(void) {
         app_switch_exit(hid_sock, &hid_addr);
     }
     (void)send_hid_event(hid_sock, &hid_addr, HID_RIGHT_ALT, 0);
+    (void)send_hid_event(hid_sock, &hid_addr, HID_LEFT_ARROW, 0);
+    (void)send_hid_event(hid_sock, &hid_addr, HID_RIGHT_ARROW, 0);
+    (void)send_hid_event(hid_sock, &hid_addr, HID_ENTER, 0);
+    (void)send_hid_event(hid_sock, &hid_addr, HID_BACKSPACE, 0);
 
     close(mic_sock);
     close(hid_sock);
