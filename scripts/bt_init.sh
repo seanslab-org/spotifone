@@ -171,7 +171,7 @@ else
     if [ -x /opt/spotifone/daemon/mic_bridge ]; then
         start-stop-daemon --start --background \
             --pidfile /var/run/spotifone_mic.pid --make-pidfile \
-            --startas /bin/sh -- -c '/opt/spotifone/daemon/mic_bridge > /tmp/mic_bridge.log 2>&1'
+            --startas /bin/sh -- -c 'exec /opt/spotifone/daemon/mic_bridge > /tmp/mic_bridge.log 2>&1'
         sleep 2
         echo "mic_bridge started"
     else
@@ -190,7 +190,7 @@ rm -f /var/run/spotifone.pid /tmp/spotifone_hid.sock
 if [ -x /opt/spotifone/daemon/hid_keyboard ]; then
     start-stop-daemon --start --background \
         --pidfile /var/run/spotifone.pid --make-pidfile \
-        --startas /bin/sh -- -c '/opt/spotifone/daemon/hid_keyboard > /tmp/hid_keyboard.log 2>&1'
+        --startas /bin/sh -- -c 'exec /opt/spotifone/daemon/hid_keyboard > /tmp/hid_keyboard.log 2>&1'
     sleep 2
     echo "C HID keyboard daemon started"
 else
@@ -206,7 +206,7 @@ rm -f /var/run/spotifone_btn.pid
 if [ -x /opt/spotifone/daemon/button_listener ]; then
     start-stop-daemon --start --background \
         --pidfile /var/run/spotifone_btn.pid --make-pidfile \
-        --startas /bin/sh -- -c '/opt/spotifone/daemon/button_listener > /tmp/button.log 2>&1'
+        --startas /bin/sh -- -c 'exec /opt/spotifone/daemon/button_listener > /tmp/button.log 2>&1'
     echo "C button listener daemon started"
 else
     echo "WARNING: button_listener binary not found at /opt/spotifone/daemon/button_listener"
@@ -242,6 +242,12 @@ if [ "$KEYBOARD_FIRST" != "1" ]; then
     fi
 else
     echo "keyboard-first: auto-reconnect disabled"
+fi
+
+# Step 11: Auto-reconnect to previously paired devices (background)
+if [ "$KEYBOARD_FIRST" != "1" ]; then
+    /opt/spotifone/scripts/auto_reconnect.sh &
+    echo "Auto-reconnect started (background)"
 fi
 
 echo "$(date): bt_init.sh complete"

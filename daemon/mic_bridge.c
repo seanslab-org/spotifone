@@ -75,6 +75,7 @@ struct sco_options { unsigned short mtu; };
 #define CMD_STOP_STREAMING  0x00
 #define CMD_START_STREAMING 0x01
 #define CMD_STATUS_QUERY    0x02
+#define CMD_CONNECT_AG      0x03  /* Outbound RFCOMM to AG: [0x03, bd[6], channel] */
 
 /* Connection states */
 enum bridge_state {
@@ -732,6 +733,71 @@ static void *audio_thread_func(void *arg) {
     return NULL;
 }
 
+/* ---------- Outbound RFCOMM connect ---------- */
+
+static int connect_rfcomm_outbound(const unsigned char *bdaddr, uint8_t channel) {
+#if HAS_BLUETOOTH
+    struct sockaddr_rc local_addr, remote_addr;
+
+    if (state != STATE_IDLE) {
+        log_info("Outbound connect skipped: already in state %s", state_names[state]);
+        return -1;
+    }
+
+    int fd = socket(AF_BLUETOOTH, SOCK_STREAM, BTPROTO_RFCOMM);
+    if (fd < 0) {
+        log_error("RFCOMM socket failed: %s", strerror(errno));
+        return -1;
+    }
+
+    /* Bind to local adapter */
+    memset(&local_addr, 0, sizeof(local_addr));
+    local_addr.rc_family = AF_BLUETOOTH;
+    local_addr.rc_channel = 0;  /* Let kernel assign */
+    memset(&local_addr.rc_bdaddr, 0, sizeof(bdaddr_t));
+    if (bind(fd, (struct sockaddr *)&local_addr, sizeof(local_addr)) < 0) {
+        log_error("RFCOMM bind failed: %s", strerror(errno));
+        close(fd);
+        return -1;
+    }
+
+    /* Connect to remote AG */
+    memset(&remote_addr, 0, sizeof(remote_addr));
+    remote_addr.rc_family = AF_BLUETOOTH;
+    remote_addr.rc_channel = channel;
+    memcpy(&remote_addr.rc_bdaddr, bdaddr, 6);
+
+    log_info("Outbound RFCOMM connecting to %02X:%02X:%02X:%02X:%02X:%02X ch %d",
+             bdaddr[5], bdaddr[4], bdaddr[3], bdaddr[2], bdaddr[1], bdaddr[0],
+             channel);
+
+    if (connect(fd, (struct sockaddr *)&remote_addr, sizeof(remote_addr)) < 0) {
+        log_error("RFCOMM connect failed: %s", strerror(errno));
+        close(fd);
+        return -1;
+    }
+
+    log_info("Outbound RFCOMM connected");
+
+    /* Close any existing RFCOMM */
+    if (rfcomm_fd >= 0) {
+        close(rfcomm_fd);
+    }
+    rfcomm_fd = fd;
+
+    snprintf(connected_device, sizeof(connected_device),
+             "/org/bluez/hci0/dev_%02X_%02X_%02X_%02X_%02X_%02X",
+             bdaddr[5], bdaddr[4], bdaddr[3], bdaddr[2], bdaddr[1], bdaddr[0]);
+
+    set_state(STATE_RFCOMM_CONNECTED);
+    return 0;
+#else
+    (void)bdaddr; (void)channel;
+    log_error("RFCOMM not available (non-Linux build)");
+    return -1;
+#endif
+}
+
 /* ---------- Control socket ---------- */
 
 static int setup_control_socket(const char *path) {
@@ -792,6 +858,24 @@ static void handle_control_command(void) {
         unsigned char resp = (unsigned char)state;
         sendto(ctrl_sock_fd, &resp, 1, 0,
                (struct sockaddr *)&from, fromlen);
+        break;
+    }
+
+    case CMD_CONNECT_AG: {
+        /* Outbound RFCOMM connect: read remaining 7 bytes [bd_addr[6], channel] */
+        unsigned char payload[7];
+        ssize_t r = recvfrom(ctrl_sock_fd, payload, sizeof(payload), 0, NULL, NULL);
+        if (r == 7) {
+            int rc = connect_rfcomm_outbound(payload, payload[6]);
+            unsigned char resp = (rc == 0) ? 0x01 : 0x00;
+            sendto(ctrl_sock_fd, &resp, 1, 0,
+                   (struct sockaddr *)&from, fromlen);
+        } else {
+            log_error("CMD_CONNECT_AG: expected 7 bytes, got %zd", r);
+            unsigned char resp = 0x00;
+            sendto(ctrl_sock_fd, &resp, 1, 0,
+                   (struct sockaddr *)&from, fromlen);
+        }
         break;
     }
 

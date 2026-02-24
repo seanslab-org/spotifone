@@ -1,8 +1,9 @@
 /*
  * Spotifone Button Listener (C)
  *
- * Reads Car Thing key events from /dev/input/event0 and forwards
- * to HID keyboard daemon and mic_bridge control socket.
+ * Reads Car Thing input events and forwards:
+ *   - Button presses (EV_KEY) -> HID keyboard daemon + mic_bridge (PTT)
+ *   - Knob rotation (EV_REL)  -> HID keyboard daemon (macOS app switcher)
  *
  * Round button (code 1):
  *   - Press:   send Right Alt (0xE6) press to HID + PTT START to mic
@@ -10,6 +11,11 @@
  *
  * Preset #1 button (code 2):
  *   - Press: send key "9" tap to HID
+ *
+ * Knob click (KEY_ENTER, code 28):
+ *   - First click:  hold Cmd (Left GUI) + tap Tab (Cmd+Tab) to open app switcher
+ *   - Rotate wheel: tap Tab to move forward; rotate opposite direction -> Shift+Tab
+ *   - Second click: release Cmd to switch/focus the selected app
  */
 
 #include <errno.h>
@@ -20,24 +26,41 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
-#define EVENT_DEV "/dev/input/event0"
+#define EVENT_DEV_BUTTONS "/dev/input/event0"
+#define EVENT_DEV_KNOB "/dev/input/event1"
 #define HID_SOCK_PATH "/tmp/spotifone_hid.sock"
 #define MIC_SOCK_PATH "/tmp/spotifone_mic.sock"
 
 #define ROUND_BUTTON_CODE 1
 #define PRESET_1_CODE 2
+#define KNOB_CLICK_CODE 28
 
 #define HID_RIGHT_ALT 0xE6
 #define HID_KEY_9 0x26
+#define HID_LEFT_SHIFT 0xE1
+#define HID_LEFT_GUI 0xE3 /* macOS Command key */
+#define HID_TAB 0x2B
 
 #define MIC_CMD_STOP  0x00
 #define MIC_CMD_START 0x01
+
+/* Knob rotation: EV_REL code 6 on Car Thing (see src/hardware.py) */
+#define KNOB_REL_CODE 6
+
+/* Safety: if user forgets to exit app switcher, auto-release Cmd */
+#define APP_SWITCH_TIMEOUT_MS 3000
+
+/* Some kernels/drivers may surface knob click on multiple event devices.
+ * Debounce so we don't toggle ENTER+EXIT on a single physical click. */
+#define KNOB_CLICK_DEBOUNCE_MS 200
 
 static volatile int g_running = 1;
 
@@ -49,6 +72,12 @@ static void on_signal(int sig) {
 static void log_info(const char *msg) {
     fprintf(stdout, "[button_listener] %s\n", msg);
     fflush(stdout);
+}
+
+static long long monotonic_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000LL + (long long)ts.tv_nsec / 1000000LL;
 }
 
 static int send_hid_event(int sock, const struct sockaddr_un *addr, uint8_t keycode, int pressed) {
@@ -77,27 +106,84 @@ static void send_tap(int sock, const struct sockaddr_un *addr, uint8_t keycode) 
     (void)send_hid_event(sock, addr, keycode, 0);
 }
 
+static void app_switch_enter(int hid_sock, const struct sockaddr_un *hid_addr) {
+    /* Cmd down, then Tab tap to open the app switcher. */
+    (void)send_hid_event(hid_sock, hid_addr, HID_LEFT_GUI, 1);
+    usleep(10000);
+    send_tap(hid_sock, hid_addr, HID_TAB);
+}
+
+static void app_switch_exit(int hid_sock, const struct sockaddr_un *hid_addr) {
+    /* Be defensive: ensure Tab/Shift are not left "down" before releasing Cmd. */
+    (void)send_hid_event(hid_sock, hid_addr, HID_TAB, 0);
+    (void)send_hid_event(hid_sock, hid_addr, HID_LEFT_SHIFT, 0);
+    (void)send_hid_event(hid_sock, hid_addr, HID_LEFT_GUI, 0);
+}
+
+static void app_switch_step(int hid_sock, const struct sockaddr_un *hid_addr, int direction) {
+    /* direction: >0 = forward, <0 = backward */
+    if (direction < 0) {
+        (void)send_hid_event(hid_sock, hid_addr, HID_LEFT_SHIFT, 1);
+        usleep(5000);
+        send_tap(hid_sock, hid_addr, HID_TAB);
+        usleep(5000);
+        (void)send_hid_event(hid_sock, hid_addr, HID_LEFT_SHIFT, 0);
+    } else {
+        send_tap(hid_sock, hid_addr, HID_TAB);
+    }
+}
+
+static void handle_knob_click(
+    int hid_sock,
+    const struct sockaddr_un *hid_addr,
+    int *app_switch_active,
+    long long *app_switch_last_ms)
+{
+    /* Toggle macOS app switcher mode on knob click. */
+    if (!(*app_switch_active)) {
+        app_switch_enter(hid_sock, hid_addr);
+        *app_switch_active = 1;
+        *app_switch_last_ms = monotonic_ms();
+        log_info("Knob click -> app switcher ENTER (Cmd down + Tab)");
+    } else {
+        app_switch_exit(hid_sock, hid_addr);
+        *app_switch_active = 0;
+        log_info("Knob click -> app switcher EXIT (Cmd up)");
+    }
+}
+
 int main(void) {
-    int event_fd = -1;
+    int event_fd_buttons = -1;
+    int event_fd_knob = -1;
     int hid_sock = -1;
     int mic_sock = -1;
     struct sockaddr_un hid_addr;
     struct sockaddr_un mic_addr;
     struct input_event ev;
 
+    int app_switch_active = 0;
+    long long app_switch_last_ms = 0;
+    long long knob_click_last_ms = 0;
+
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
-    event_fd = open(EVENT_DEV, O_RDONLY);
-    if (event_fd < 0) {
-        fprintf(stderr, "[button_listener ERROR] Failed to open %s: %s\n", EVENT_DEV, strerror(errno));
+    event_fd_buttons = open(EVENT_DEV_BUTTONS, O_RDONLY);
+    if (event_fd_buttons < 0) {
+        fprintf(stderr, "[button_listener ERROR] Failed to open %s: %s\n", EVENT_DEV_BUTTONS, strerror(errno));
         return 1;
+    }
+
+    event_fd_knob = open(EVENT_DEV_KNOB, O_RDONLY);
+    if (event_fd_knob < 0) {
+        /* Non-fatal: allow running without knob device present. */
+        fprintf(stderr, "[button_listener WARN] Failed to open %s: %s\n", EVENT_DEV_KNOB, strerror(errno));
     }
 
     hid_sock = socket(AF_UNIX, SOCK_DGRAM, 0);
     if (hid_sock < 0) {
         fprintf(stderr, "[button_listener ERROR] Failed to create HID socket: %s\n", strerror(errno));
-        close(event_fd);
+        close(event_fd_buttons);
         return 1;
     }
 
@@ -105,7 +191,7 @@ int main(void) {
     if (mic_sock < 0) {
         fprintf(stderr, "[button_listener ERROR] Failed to create mic socket: %s\n", strerror(errno));
         close(hid_sock);
-        close(event_fd);
+        close(event_fd_buttons);
         return 1;
     }
 
@@ -117,48 +203,134 @@ int main(void) {
     mic_addr.sun_family = AF_UNIX;
     strncpy(mic_addr.sun_path, MIC_SOCK_PATH, sizeof(mic_addr.sun_path) - 1);
 
-    log_info("Listening on /dev/input/event0");
+    log_info("Listening on /dev/input/event0 (buttons)");
+    if (event_fd_knob >= 0) {
+        log_info("Listening on /dev/input/event1 (knob)");
+    }
     log_info("Round button -> Right Alt (0xE6) + PTT");
     log_info("Preset #1 -> key '9'");
+    log_info("Knob click -> macOS app switcher (Cmd+Tab hold, rotate=Tab, click=release)");
 
     while (g_running) {
-        ssize_t n = read(event_fd, &ev, sizeof(ev));
-        if (n < 0) {
+        fd_set rfds;
+        struct timeval tv;
+        int maxfd = -1;
+
+        FD_ZERO(&rfds);
+        FD_SET(event_fd_buttons, &rfds);
+        maxfd = event_fd_buttons;
+        if (event_fd_knob >= 0) {
+            FD_SET(event_fd_knob, &rfds);
+            if (event_fd_knob > maxfd) {
+                maxfd = event_fd_knob;
+            }
+        }
+
+        /* Short timeout so we can enforce app-switcher safety release. */
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000;
+
+        int rc = select(maxfd + 1, &rfds, NULL, NULL, &tv);
+        if (rc < 0) {
             if (errno == EINTR) {
                 continue;
             }
-            fprintf(stderr, "[button_listener ERROR] read() failed: %s\n", strerror(errno));
+            fprintf(stderr, "[button_listener ERROR] select() failed: %s\n", strerror(errno));
             break;
         }
-        if (n != (ssize_t)sizeof(ev)) {
-            continue;
-        }
 
-        if (ev.type != EV_KEY) {
-            continue;
-        }
-
-        if (ev.code == ROUND_BUTTON_CODE) {
-            if (ev.value == 1) {
-                /* Press: Right Alt down + PTT start */
-                send_hid_event(hid_sock, &hid_addr, HID_RIGHT_ALT, 1);
-                send_mic_cmd(mic_sock, &mic_addr, MIC_CMD_START);
-                log_info("Round button press -> Right Alt DOWN + PTT START");
-            } else if (ev.value == 0) {
-                /* Release: Right Alt up + PTT stop */
-                send_hid_event(hid_sock, &hid_addr, HID_RIGHT_ALT, 0);
-                send_mic_cmd(mic_sock, &mic_addr, MIC_CMD_STOP);
-                log_info("Round button release -> Right Alt UP + PTT STOP");
+        /* Timeout path: auto-release Cmd if user left app switcher open. */
+        if (rc == 0 && app_switch_active) {
+            long long now = monotonic_ms();
+            if (now - app_switch_last_ms >= APP_SWITCH_TIMEOUT_MS) {
+                app_switch_exit(hid_sock, &hid_addr);
+                app_switch_active = 0;
+                log_info("App switcher timeout -> released Cmd");
             }
-        } else if (ev.code == PRESET_1_CODE && ev.value == 1) {
-            send_tap(hid_sock, &hid_addr, HID_KEY_9);
-            log_info("Preset #1 press -> sent key '9'");
+            continue;
+        }
+
+        /* Buttons device: EV_KEY */
+        if (FD_ISSET(event_fd_buttons, &rfds)) {
+            ssize_t n = read(event_fd_buttons, &ev, sizeof(ev));
+            if (n < 0) {
+                if (errno != EINTR) {
+                    fprintf(stderr, "[button_listener ERROR] read(buttons) failed: %s\n", strerror(errno));
+                }
+            } else if (n == (ssize_t)sizeof(ev)) {
+                if (ev.type == EV_KEY) {
+                    if (ev.code == ROUND_BUTTON_CODE) {
+                        if (ev.value == 1) {
+                            /* Press: Right Alt down + PTT start */
+                            send_hid_event(hid_sock, &hid_addr, HID_RIGHT_ALT, 1);
+                            send_mic_cmd(mic_sock, &mic_addr, MIC_CMD_START);
+                            log_info("Round button press -> Right Alt DOWN + PTT START");
+                        } else if (ev.value == 0) {
+                            /* Release: Right Alt up + PTT stop */
+                            send_hid_event(hid_sock, &hid_addr, HID_RIGHT_ALT, 0);
+                            send_mic_cmd(mic_sock, &mic_addr, MIC_CMD_STOP);
+                            log_info("Round button release -> Right Alt UP + PTT STOP");
+                        }
+                    } else if (ev.code == PRESET_1_CODE && ev.value == 1) {
+                        send_tap(hid_sock, &hid_addr, HID_KEY_9);
+                        log_info("Preset #1 press -> sent key '9'");
+                    } else if (ev.code == KNOB_CLICK_CODE && ev.value == 1) {
+                        long long now = monotonic_ms();
+                        if (now - knob_click_last_ms >= KNOB_CLICK_DEBOUNCE_MS) {
+                            knob_click_last_ms = now;
+                            handle_knob_click(hid_sock, &hid_addr, &app_switch_active, &app_switch_last_ms);
+                        }
+                    }
+                }
+            }
+        }
+
+        /* Knob device: EV_REL */
+        if (event_fd_knob >= 0 && FD_ISSET(event_fd_knob, &rfds)) {
+            ssize_t n = read(event_fd_knob, &ev, sizeof(ev));
+            if (n < 0) {
+                if (errno != EINTR) {
+                    fprintf(stderr, "[button_listener ERROR] read(knob) failed: %s\n", strerror(errno));
+                }
+            } else if (n == (ssize_t)sizeof(ev)) {
+                if (ev.type == EV_KEY && ev.code == KNOB_CLICK_CODE && ev.value == 1) {
+                    /* Some systems report knob click on the rotary device (event1). */
+                    long long now = monotonic_ms();
+                    if (now - knob_click_last_ms >= KNOB_CLICK_DEBOUNCE_MS) {
+                        knob_click_last_ms = now;
+                        handle_knob_click(hid_sock, &hid_addr, &app_switch_active, &app_switch_last_ms);
+                    }
+                } else if (ev.type == EV_REL && ev.code == KNOB_REL_CODE && app_switch_active) {
+                    int steps = ev.value;
+                    if (steps == 0) {
+                        /* ignore */
+                    } else if (steps > 0) {
+                        for (int i = 0; i < steps; i++) {
+                            app_switch_step(hid_sock, &hid_addr, 1);
+                        }
+                    } else {
+                        for (int i = 0; i < -steps; i++) {
+                            app_switch_step(hid_sock, &hid_addr, -1);
+                        }
+                    }
+                    app_switch_last_ms = monotonic_ms();
+                }
+            }
         }
     }
 
+    /* Best-effort release of any held modifiers to avoid sticky keys on host. */
+    if (app_switch_active) {
+        app_switch_exit(hid_sock, &hid_addr);
+    }
+    (void)send_hid_event(hid_sock, &hid_addr, HID_RIGHT_ALT, 0);
+
     close(mic_sock);
     close(hid_sock);
-    close(event_fd);
+    if (event_fd_knob >= 0) {
+        close(event_fd_knob);
+    }
+    close(event_fd_buttons);
     log_info("Stopped");
     return 0;
 }

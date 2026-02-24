@@ -92,7 +92,7 @@
 ## Open Bugs
 - [ ] **BUG: Runtime logo + background still shows color noise pixels** — fbcon unbind (vtcon0 glob) and `dd if=/dev/zero` pre-clear deployed but not fully effective. Noise persists in black areas around logo/text. Needs deeper investigation (possible double-buffer page flip, or another process writing to fb0 after setup_display.sh).
 - [ ] **BUG: Boot logo still shows old Spotify logo** — R5G6B5 `bootup.bmp` generated and flashed to `/dev/logo` partition, but U-Boot still renders old image on reboot. Possible causes: U-Boot reads from a different partition slot, BMP header not accepted by Amlogic parser, or logo partition not the active one (check env `logo=` param).
-- [ ] **BUG: No BT auto-reconnect on boot** — After reboot, previously paired devices don't auto-reconnect. Device is discoverable but host must manually re-connect. Need to implement auto-reconnect logic in bt_init.sh or a separate daemon (attempt `ConnectProfile` on known paired devices after BT stack is up).
+- [x] **BUG: No BT auto-reconnect on boot** — Fixed: added `scripts/auto_reconnect.sh` (launched from bt_init.sh Step 11) that enumerates paired devices and calls `Device1.Connect` with retry logic. Also added `AutoConnect=true` to hid_keyboard.c RegisterProfile options.
 
 ## Acceptance Criteria
 - All unit tests pass (`python3 -m pytest tests/ -v`)

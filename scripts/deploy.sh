@@ -28,6 +28,10 @@ adb -s "$SERIAL" push "${SCRIPT_DIR}/bt-init.service" "/etc/systemd/system/"
 adb -s "$SERIAL" push "${SCRIPT_DIR}/bt_init.sh" "/scripts/bt_init.sh"
 adb -s "$SERIAL" shell "chmod +x /scripts/bt_init.sh"
 
+# Push auto-reconnect script
+adb -s "$SERIAL" push "${SCRIPT_DIR}/auto_reconnect.sh" "${REMOTE_DIR}/scripts/auto_reconnect.sh"
+adb -s "$SERIAL" shell "chmod +x ${REMOTE_DIR}/scripts/auto_reconnect.sh"
+
 # Push display assets
 if [ -f "${PROJECT_DIR}/logo.fb" ]; then
     adb -s "$SERIAL" push "${PROJECT_DIR}/logo.fb" "${REMOTE_DIR}/logo.fb"

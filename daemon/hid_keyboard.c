@@ -474,6 +474,7 @@ static int register_hid_profile(void) {
     append_dict_entry_uint16(&dict, "PSM", 0x0011);
     append_dict_entry_bool(&dict, "RequireAuthentication", FALSE);
     append_dict_entry_bool(&dict, "RequireAuthorization", FALSE);
+    append_dict_entry_bool(&dict, "AutoConnect", TRUE);
     dbus_message_iter_close_container(&it, &dict);
 
     if (!dbus_connection_send_with_reply(g_conn, msg, &pending, 5000) || !pending) {
