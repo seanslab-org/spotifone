@@ -78,20 +78,53 @@
 - [ ] Boot-to-ready automation
 
 ## Phase 3: Display & Branding
-- [x] Create `convert_logo.py` — extract mic icon from horizontal logo, render vertical 480×800 layout
+- [x] Create `convert_logo.py` — generate vertical 480×800 layout
 - [x] Generate `logo.fb` (BGR888 for `/dev/fb0`) and `logo.png` (preview)
 - [x] Create `setup_display.sh` — unbind fbcon, clear fb, write logo to `/dev/fb0`
 - [x] Integrate into `bt_init.sh` Step 1b (display before BT bring-up)
 - [x] Update `deploy.sh` to push display assets
 - [x] Fix noisy framebuffer background (vtcon0 not vtcon1, add dd zero pre-clear)
+- [ ] Walkie-style refresh: text-only (no icon), purple accent
+  - Acceptance: boot + runtime backgrounds are pure text blocks; no bitmap icon art
+  - Acceptance: palette matches walkie.sh structure (bg/surface/border/text/muted) with purple accent
 - [x] Generate `bootup.bmp` (16-bit R5G6B5) for Amlogic boot logo partition
 - [x] Flash boot logo to `/dev/logo` (replaces stock blue house)
-- [ ] Reboot test: verify boot logo renders during U-Boot stage
+- [x] Reboot test: verify boot logo renders during U-Boot stage
 - [ ] Full boot sequence test: boot logo → runtime framebuffer (seamless transition)
 
+## Phase 4: Phase 2 Menu (On-Device UI + BT Host Management)
+- [x] Write SDD: menu UI + BT host management
+  - Acceptance: defines input mapping, screen states, D-Bus calls, failure modes, rollback, test plan
+- [x] Lock input scheme (no regressions)
+  - Acceptance: mute button (`KEY_M` / code 50) toggles menu; all other buttons keep current behavior
+  - Acceptance: menu interaction is touch-only (touchscreen `/dev/input/event3`)
+- [x] Implement framebuffer UI renderer (no X11)
+  - Acceptance: stable rendering on `/dev/fb0` (handles stride + virtual height); no background noise artifacts
+- [x] Implement menu state machine (hidden/visible + subpages)
+  - Acceptance: toggles via mute button; touch interactions work; exits cleanly and restores idle screen
+- [ ] Bluetooth Host List page
+  - Acceptance: shows previously paired devices with Name + Address + Connected status
+  - Acceptance: selecting a host triggers reconnect (BlueZ `Device1.Connect`)
+  - Acceptance: delete host removes pairing entry (Adapter1.RemoveDevice or equivalent) with confirmation prompt
+- [ ] Scan for Host page
+  - Acceptance: starts/stops discovery; lists discovered devices (Name/Address) and allows connect attempt
+  - Notes: computers may not be discoverable unless user enables pairing mode; UI should show guidance
+- [x] Version/About section
+  - Acceptance: shows Spotifone version (git SHA or build string), “slowgan: wait and hope”, and `https://seanslab.org`
+- [ ] Input routing when menu is open
+  - Acceptance: menu does not change existing key behavior; no extra HID keys introduced by menu toggle
+- [x] Boot integration
+  - Acceptance: menu-capable daemon starts from `bt_init.sh`; logs to `/tmp/menu.log`; failure falls back to normal button forwarding
+- [ ] Verification on device
+  - Acceptance: manual test checklist completed (toggle menu, connect/delete host, scan page, close menu, PTT + wheel app-switch still work)
+
 ## Open Bugs
-- [ ] **BUG: Runtime logo + background still shows color noise pixels** — fbcon unbind (vtcon0 glob) and `dd if=/dev/zero` pre-clear deployed but not fully effective. Noise persists in black areas around logo/text. Needs deeper investigation (possible double-buffer page flip, or another process writing to fb0 after setup_display.sh).
-- [ ] **BUG: Boot logo still shows old Spotify logo** — R5G6B5 `bootup.bmp` generated and flashed to `/dev/logo` partition, but U-Boot still renders old image on reboot. Possible causes: U-Boot reads from a different partition slot, BMP header not accepted by Amlogic parser, or logo partition not the active one (check env `logo=` param).
+- [x] **BUG: Runtime logo/background shows color noise ("static")** — Three root causes found and fixed:
+  1. OSD plane starts disabled after boot (`osd[0] enable: 0`). Fix: `FBIOBLANK(0)` ioctl to unblank.
+  2. `osd_plane_alpha=0x200` means fully transparent (alpha value=0), not opaque. Fix: use `0x300` (global alpha, value=256=fully opaque).
+  3. 24bpp BGR mode leaves alpha bits undefined → random pixel noise. Fix: switch to 32bpp BGRA with A=0xFF per pixel via `FBIOPUT_VSCREENINFO` ioctl.
+  - Verified on device after reboot — clean Spotifone logo, no noise.
+- [x] **BUG: Boot logo still shows old Spotify logo** — Fixed: patched `/dev/logo` item `bootup_spotify` and updated U-Boot env `init_display_debian` to use `bootup_spotify`.
 - [x] **BUG: No BT auto-reconnect on boot** — Fixed: added `scripts/auto_reconnect.sh` (launched from bt_init.sh Step 11) that enumerates paired devices and calls `Device1.Connect` with retry logic. Also added `AutoConnect=true` to hid_keyboard.c RegisterProfile options.
 
 ## Acceptance Criteria

@@ -20,6 +20,13 @@ adb -s "$SERIAL" shell "mkdir -p ${REMOTE_DIR}/src ${REMOTE_DIR}/daemon ${REMOTE
 # Push Python source
 adb -s "$SERIAL" push "${PROJECT_DIR}/src/." "${REMOTE_DIR}/src/"
 
+# Write/push a simple version string for on-device UI
+VERSION_STR="$(git describe --always --dirty 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+TMP_VER="$(mktemp)"
+echo "${VERSION_STR}" > "${TMP_VER}"
+adb -s "$SERIAL" push "${TMP_VER}" "${REMOTE_DIR}/VERSION" >/dev/null
+rm -f "${TMP_VER}"
+
 # Push systemd units
 adb -s "$SERIAL" push "${SCRIPT_DIR}/spotifone.service" "/etc/systemd/system/" 2>/dev/null || true
 adb -s "$SERIAL" push "${SCRIPT_DIR}/bt-init.service" "/etc/systemd/system/"
@@ -33,6 +40,10 @@ adb -s "$SERIAL" push "${SCRIPT_DIR}/auto_reconnect.sh" "${REMOTE_DIR}/scripts/a
 adb -s "$SERIAL" shell "chmod +x ${REMOTE_DIR}/scripts/auto_reconnect.sh"
 
 # Push display assets
+if [ -f "${PROJECT_DIR}/boot.fb" ]; then
+    adb -s "$SERIAL" push "${PROJECT_DIR}/boot.fb" "${REMOTE_DIR}/boot.fb"
+    echo "  boot.fb deployed"
+fi
 if [ -f "${PROJECT_DIR}/logo.fb" ]; then
     adb -s "$SERIAL" push "${PROJECT_DIR}/logo.fb" "${REMOTE_DIR}/logo.fb"
     echo "  logo.fb deployed"

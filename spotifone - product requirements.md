@@ -1,6 +1,8 @@
 
 Spotifone Project Overview
 
+# Phase 1
+
 Spotifone is a project based on Spotify Car Thing. The goal is to use community software to reprogram the Spotify Car Thing into a new device that functions as both a standard Bluetooth microphone and a standard Bluetooth keyboard.
 
 1. Bluetooth Microphone
@@ -12,3 +14,24 @@ Spotifone is a project based on Spotify Car Thing. The goal is to use community 
    (c) This button will send keyboard shortcuts: for Windows, it will send Right Alt; for Mac, it will send Right Option.
 
 This is a simple requirement: a Bluetooth keyboard with one key to send shortcuts, and a device that acts as a Bluetooth microphone. This will be fully implemented using the Spotify Car Thing hardware and community software.
+
+# Phase 2
+
+Add a menu to the system, the menu will be toggled on/off by the **mute button** (`EV_KEY` code 50 / `KEY_M`). On the menu there will be the following elements:
+
+Bluetooth Host List: list the computers connection history, each one can be deleted, each one can be clicked to reconnect
+
+Scan for Host: a button to click. scanning available Windows or Mac computers to connect
+
+version: list Spotifone version
+
+slowgan: wait and hope
+
+by https://seanslab.org 
+
+## UI Design Theme
+- Solid, minimal design
+- Generous whitespace.
+- Purple as the primary brand color with warm neutrals: `#6E56CF`
+- Typography: `Instrument Sans` (or `Manrope` if unavailable)
+- Walkie.sh-inspired, text-first UI (dark bg/surface/border + muted text; no icon art)

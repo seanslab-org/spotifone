@@ -190,11 +190,12 @@ def render_canvas() -> Image.Image:
 
 
 def render_boot_canvas() -> Image.Image:
-    """Render the 480x800 boot splash — centered 'spotifone' only."""
+    """Render the 480x800 boot splash — centered 'spotifone' + 'loading...'."""
     canvas = Image.new("RGB", (FB_WIDTH, FB_HEIGHT), BG)
     draw = ImageDraw.Draw(canvas)
 
     title_font = find_font(SANS_FONT_PATHS, 74, bold=True)
+    loading_font = find_font(SANS_FONT_PATHS, 26, bold=False)
 
     left = "spotif"
     right = "one"
@@ -207,6 +208,9 @@ def render_boot_canvas() -> Image.Image:
     title_y = (FB_HEIGHT - title_h) // 2
     draw.text((title_x, title_y), left, fill=TEXT, font=title_font)
     draw.text((title_x + left_w, title_y), right, fill=ACCENT, font=title_font)
+
+    loading = "loading..."
+    draw.text((_center_x(draw, loading, loading_font), title_y + title_h + 24), loading, fill=MUTED, font=loading_font)
 
     return canvas
 
@@ -224,8 +228,13 @@ def convert_logo(output_path: str) -> None:
     Path(output_path).write_bytes(bgra_data)
     print(f"Output: {output_path} ({len(bgra_data)} bytes)")
 
-    # Boot logo: separate minimal canvas for Amlogic logo partition
+    # Boot splash: separate minimal canvas with "loading..." text
     boot_canvas = render_boot_canvas()
+    boot_fb_path = str(Path(output_path).with_name("boot.fb"))
+    Path(boot_fb_path).write_bytes(rgb_to_bgra_bytes(boot_canvas))
+    print(f"Boot FB: {boot_fb_path} ({FB_WIDTH}x{FB_HEIGHT} BGRA)")
+
+    # Boot logo: 16-bit BMP for Amlogic logo partition
     bmp_path = str(Path(output_path).with_name("bootup.bmp"))
     save_r5g6b5_bmp(boot_canvas, bmp_path)
 
