@@ -100,6 +100,19 @@ for DEV_MAC in $PAIRED_DEVICES; do
         if echo "$CONN_RESULT" | grep -q 'method return'; then
             log "${DEV_LABEL} connected successfully"
             CONNECTED=1
+
+            # Trigger outbound HID connect — Device1.Connect only establishes
+            # HFP (outbound RFCOMM). HID requires the device to connect L2CAP
+            # to the host's PSM 17/19. Send [0xFF, bd_addr[6]] to hid_keyboard.
+            sleep 1
+            python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+addr = bytes.fromhex(sys.argv[1].replace(':', ''))
+s.sendto(b'\xff' + addr, '/tmp/spotifone_hid.sock')
+" "$DEV_MAC" 2>/dev/null && log "${DEV_LABEL} HID connect triggered" \
+                           || log "${DEV_LABEL} HID connect IPC failed (non-fatal)"
+
             break
         else
             ERR_MSG=$(echo "$CONN_RESULT" | grep 'Error' | head -1)

@@ -212,6 +212,11 @@ else
     echo "WARNING: button_listener binary not found at /opt/spotifone/daemon/button_listener"
 fi
 
+# NOTE: Menu UI (Step 9b) is deferred to after auto-reconnect (Step 11).
+# Python 3.9 cold-start on this ARM SoC is CPU-heavy (~3-5s of imports).
+# Starting it here starves the D-Bus calls in Steps 10-11, preventing
+# auto-reconnect from succeeding. See devlog-20260225.md.
+
 # Keep Classic discoverability/page scan enabled for HFP discovery and reconnect.
 hciconfig hci0 piscan
 echo "Classic BT discoverable (piscan)"
@@ -248,6 +253,21 @@ fi
 if [ "$KEYBOARD_FIRST" != "1" ]; then
     /opt/spotifone/scripts/auto_reconnect.sh &
     echo "Auto-reconnect started (background)"
+fi
+
+# Step 12: Start Menu UI daemon (was Step 9b, moved here to avoid CPU contention)
+# Python 3.9 cold-start is CPU-intensive on this SoC. Starting it before
+# Steps 10-11 starved D-Bus calls and prevented auto-reconnect.
+start-stop-daemon --stop --pidfile /var/run/spotifone_menu.pid --retry 1 > /dev/null 2>&1 || true
+pkill -f '/opt/spotifone/src/menu_ui.py' 2>/dev/null || true
+rm -f /var/run/spotifone_menu.pid /tmp/spotifone_menu.sock
+
+if command -v python3 >/dev/null 2>&1 && [ -f /opt/spotifone/src/menu_ui.py ]; then
+    nohup /usr/bin/python3 /opt/spotifone/src/menu_ui.py >/dev/null 2>&1 </dev/null &
+    echo $! > /var/run/spotifone_menu.pid
+    echo "Menu UI daemon started"
+else
+    echo "WARNING: menu_ui.py not found or python3 missing"
 fi
 
 echo "$(date): bt_init.sh complete"

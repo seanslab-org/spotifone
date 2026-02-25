@@ -203,9 +203,82 @@ static void send_hid_report(uint8_t modifier, uint8_t keycode) {
     }
 }
 
+/* Outbound L2CAP connect to host's HID PSMs (device-initiated reconnect).
+ * bdaddr_bytes: 6 bytes, network order (AA:BB:CC:DD:EE:FF → [AA,BB,CC,DD,EE,FF]).
+ * bdaddr_t is little-endian (reversed), so we swap. */
+static int connect_hid_to_host(const uint8_t *bdaddr_bytes) {
+    struct sockaddr_l2 addr;
+    bdaddr_t remote;
+    int ctrl_fd, intr_fd;
+
+    for (int i = 0; i < 6; i++) {
+        remote.b[5 - i] = bdaddr_bytes[i];
+    }
+
+    log_info("Outbound HID connect to %02X:%02X:%02X:%02X:%02X:%02X",
+             bdaddr_bytes[0], bdaddr_bytes[1], bdaddr_bytes[2],
+             bdaddr_bytes[3], bdaddr_bytes[4], bdaddr_bytes[5]);
+
+    close_hid_connections();
+
+    /* Control channel (PSM 17) */
+    ctrl_fd = socket(AF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_L2CAP);
+    if (ctrl_fd < 0) {
+        log_error("Outbound PSM17 socket: %s", strerror(errno));
+        return -1;
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.l2_family = AF_BLUETOOTH;
+    addr.l2_psm = htobs(0x0011);
+    bacpy(&addr.l2_bdaddr, &remote);
+
+    if (connect(ctrl_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        log_error("Outbound PSM17 connect: %s", strerror(errno));
+        close(ctrl_fd);
+        return -1;
+    }
+
+    set_nonblocking(ctrl_fd);
+    g_ctrl_fd = ctrl_fd;
+    log_info("Control channel connected (PSM 17, outbound)");
+
+    /* Interrupt channel (PSM 19) */
+    intr_fd = socket(AF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_L2CAP);
+    if (intr_fd < 0) {
+        log_error("Outbound PSM19 socket: %s", strerror(errno));
+        return -1;
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.l2_family = AF_BLUETOOTH;
+    addr.l2_psm = htobs(0x0013);
+    bacpy(&addr.l2_bdaddr, &remote);
+
+    if (connect(intr_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        log_error("Outbound PSM19 connect: %s", strerror(errno));
+        close(intr_fd);
+        return -1;
+    }
+
+    set_nonblocking(intr_fd);
+    g_intr_fd = intr_fd;
+    g_logged_no_intr = 0;
+    log_info("Interrupt channel connected (PSM 19, outbound)");
+
+    return 0;
+}
+
 static void handle_ipc_event(void) {
     uint8_t msg[16];
     ssize_t n = recv(g_ipc_fd, msg, sizeof(msg), 0);
+
+    /* 7 bytes starting with 0xFF = outbound connect command [0xFF, bd_addr[6]] */
+    if (n == 7 && msg[0] == 0xFF) {
+        connect_hid_to_host(&msg[1]);
+        return;
+    }
+
     if (n < 2) {
         return;
     }
@@ -470,7 +543,6 @@ static int register_hid_profile(void) {
 
     dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, "{sv}", &dict);
     append_dict_entry_string(&dict, "ServiceRecord", HID_SDP_RECORD_XML);
-    append_dict_entry_string(&dict, "Role", "server");
     append_dict_entry_uint16(&dict, "PSM", 0x0011);
     append_dict_entry_bool(&dict, "RequireAuthentication", FALSE);
     append_dict_entry_bool(&dict, "RequireAuthorization", FALSE);

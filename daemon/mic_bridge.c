@@ -1055,18 +1055,6 @@ static int register_hfp_profile(void) {
     /* Options dict */
     dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY, "{sv}", &dict);
 
-    /* Role = "server" */
-    {
-        const char *key = "Role";
-        const char *val = "server";
-        dbus_message_iter_open_container(&dict, DBUS_TYPE_DICT_ENTRY, NULL, &entry);
-        dbus_message_iter_append_basic(&entry, DBUS_TYPE_STRING, &key);
-        dbus_message_iter_open_container(&entry, DBUS_TYPE_VARIANT, "s", &variant);
-        dbus_message_iter_append_basic(&variant, DBUS_TYPE_STRING, &val);
-        dbus_message_iter_close_container(&entry, &variant);
-        dbus_message_iter_close_container(&dict, &entry);
-    }
-
     /* AutoConnect = true */
     {
         const char *key = "AutoConnect";
