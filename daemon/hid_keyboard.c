@@ -258,6 +258,9 @@ static int connect_hid_to_host(const uint8_t *bdaddr_bytes) {
     if (connect(intr_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         log_error("Outbound PSM19 connect: %s", strerror(errno));
         close(intr_fd);
+        /* Also clean up ctrl channel — leave no partial state for NewConnection. */
+        close(g_ctrl_fd);
+        g_ctrl_fd = -1;
         return -1;
     }
 

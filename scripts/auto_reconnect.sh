@@ -90,6 +90,18 @@ for DEV_MAC in $PAIRED_DEVICES; do
         if echo "$RESULT" | grep -q 'boolean true'; then
             log "${DEV_LABEL} already connected"
             CONNECTED=1
+
+            # macOS may have auto-reconnected HFP only (not HID) — trigger HID connect
+            # regardless so buttons work on first connection without a manual cycle.
+            sleep 1
+            python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+addr = bytes.fromhex(sys.argv[1].replace(':', ''))
+s.sendto(b'\xff' + addr, '/tmp/spotifone_hid.sock')
+" "$DEV_MAC" 2>/dev/null && log "${DEV_LABEL} HID connect triggered (already-connected path)" \
+                           || log "${DEV_LABEL} HID connect IPC failed (non-fatal)"
+
             break
         fi
 
