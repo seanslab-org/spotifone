@@ -76,6 +76,11 @@ TEXT_DIM = (0x88, 0x88, 0x88, 0xFF) # #888888
 RED = (0x2A, 0x2A, 0xC8, 0xFF)      # muted-ish red
 GREEN = (0x2A, 0xC8, 0x2A, 0xFF)    # muted-ish green
 
+HOME_LIVE_SCAN_INTERVAL_S = 20.0
+HOME_LIVE_SCAN_TIMEOUT_S = 4
+HOME_GRID_COLUMNS = 2
+HOME_LEGEND_WIDTH = 72
+
 # IPC commands (1 byte)
 CMD_TOGGLE = 0x01
 
@@ -286,6 +291,7 @@ class Host:
     mac: str
     name: str
     connected: bool = False
+    live: bool = False
 
 
 @dataclass
@@ -584,6 +590,16 @@ def paired_hosts() -> list[Host]:
     return hosts
 
 
+def build_host_state(hosts: list[Host], connected_macs: set[str], live_macs: set[str]) -> list[Host]:
+    stateful_hosts: list[Host] = []
+    for host in hosts:
+        connected = host.mac in connected_macs
+        live = connected or (host.mac in live_macs)
+        stateful_hosts.append(Host(mac=host.mac, name=host.name, connected=connected, live=live))
+    stateful_hosts.sort(key=lambda h: (not h.connected, not h.live, h.name.lower(), h.mac))
+    return stateful_hosts
+
+
 def dev_path(mac: str) -> str:
     return "/org/bluez/hci0/dev_" + mac.replace(":", "_")
 
@@ -652,6 +668,23 @@ def scan_devices(timeout_s: int = 8) -> list[ScanDevice]:
     return devices
 
 
+def probe_live_hosts(target_macs: set[str], timeout_s: int = HOME_LIVE_SCAN_TIMEOUT_S) -> set[str]:
+    if not target_macs:
+        return set()
+    rc, out = run_cmd(["bluetoothctl", f"--timeout={timeout_s}", "scan", "on"], timeout=timeout_s + 2)
+    if rc != 0 and not out:
+        return set()
+    found: set[str] = set()
+    for line in out.splitlines():
+        m = re.search(r"Device ([0-9A-Fa-f:]{17}) (.+)$", line)
+        if not m:
+            continue
+        mac = m.group(1).upper()
+        if mac in target_macs:
+            found.add(mac)
+    return found
+
+
 class MenuUI:
     def __init__(self):
         self.visible = False
@@ -663,16 +696,158 @@ class MenuUI:
         self.scanning = False
         self.last_error: Optional[str] = None
         self._scan_thread: Optional[threading.Thread] = None
+        self._live_probe_thread: Optional[threading.Thread] = None
+        self._live_macs: set[str] = set()
+        self._last_live_probe = 0.0
 
         self.confirm_delete: Optional[Host] = None
+        self.home_status: Optional[str] = None
+        self._home_status_until = 0.0
+
+    def _set_status(self, msg: Optional[str], duration_s: float = 2.0) -> None:
+        self.last_error = msg
+        self.home_status = msg
+        self._home_status_until = time.time() + duration_s if msg else 0.0
+
+    def _clear_expired_status(self) -> None:
+        if self._home_status_until and time.time() >= self._home_status_until:
+            self.last_error = None
+            self.home_status = None
+            self._home_status_until = 0.0
 
     def refresh_hosts(self) -> None:
-        self.hosts = paired_hosts()
-        for h in self.hosts:
+        base_hosts = paired_hosts()
+        connected_macs: set[str] = set()
+        for host in base_hosts:
             try:
-                h.connected = dbus_get_connected(h.mac)
+                if dbus_get_connected(host.mac):
+                    connected_macs.add(host.mac)
             except Exception:
-                h.connected = False
+                pass
+        self.hosts = build_host_state(base_hosts, connected_macs, self._live_macs)
+
+    def _start_live_probe(self) -> None:
+        if self.scanning:
+            return
+        if self._live_probe_thread and self._live_probe_thread.is_alive():
+            return
+        now = time.time()
+        if now - self._last_live_probe < HOME_LIVE_SCAN_INTERVAL_S:
+            return
+        target_macs = {host.mac for host in self.hosts} or {host.mac for host in paired_hosts()}
+        if not target_macs:
+            self._live_macs = set()
+            self.refresh_hosts()
+            return
+        self._last_live_probe = now
+
+        def worker() -> None:
+            try:
+                live_macs = probe_live_hosts(target_macs)
+            except Exception:
+                live_macs = set()
+            self._live_macs = live_macs
+            self.refresh_hosts()
+            self.draw_current()
+
+        self._live_probe_thread = threading.Thread(target=worker, daemon=True)
+        self._live_probe_thread.start()
+
+    def draw_current(self) -> None:
+        if self.visible:
+            self.draw()
+        else:
+            self.draw_idle()
+
+    def _text_width(self, text: str, scale: int = 1, spacing: int = 1) -> int:
+        if not text:
+            return 0
+        return len(text) * (8 * scale + spacing) - spacing
+
+    def _draw_logo(self, x: int, y: int, scale: int = 2, spacing: int = 1) -> None:
+        cx = x
+        for idx, ch in enumerate("spotifone"):
+            color = TEXT if idx < 6 else PURPLE
+            self.fb.draw_char(cx, y, ch, color, scale=scale)
+            cx += (8 * scale) + spacing
+
+    def _draw_centered_logo(self, y: int, scale: int = 2, spacing: int = 1) -> None:
+        word = "spotifone"
+        x = max(0, (FB_WIDTH - self._text_width(word, scale=scale, spacing=spacing)) // 2)
+        self._draw_logo(x, y, scale=scale, spacing=spacing)
+
+    def _draw_centered_text(self, y: int, text: str, color: tuple, scale: int = 1, spacing: int = 1) -> None:
+        width = self._text_width(text, scale=scale, spacing=spacing)
+        x = max(0, (FB_WIDTH - width) // 2)
+        self.fb.draw_text(x, y, text, color, scale=scale, spacing=spacing)
+
+    def _home_layout(self) -> list[tuple[Host, int, int, int, int]]:
+        top = 160
+        bottom = FB_HEIGHT - 56
+        side_pad = 24
+        col_gap = 18
+        row_gap = 18
+        cols = HOME_GRID_COLUMNS
+        rows = max(1, (len(self.hosts) + cols - 1) // cols)
+        usable_h = max(0, bottom - top)
+        tile_area_w = FB_WIDTH - side_pad * 2 - HOME_LEGEND_WIDTH
+        tile_w = (tile_area_w - col_gap * (cols - 1)) // cols
+        tile_h = min(150, max(96, (usable_h - row_gap * max(0, rows - 1)) // rows))
+        layout: list[tuple[Host, int, int, int, int]] = []
+        for idx, host in enumerate(self.hosts):
+            row = idx // cols
+            col = idx % cols
+            x = side_pad + col * (tile_w + col_gap)
+            y = top + row * (tile_h + row_gap)
+            layout.append((host, x, y, tile_w, tile_h))
+        return layout
+
+    def _home_legend_layout(self) -> list[tuple[str, int, int, int, int]]:
+        x0 = FB_WIDTH - 58
+        return [
+            ("Menu", x0, 120, 50, 20),
+            ("Left", x0, 264, 50, 18),
+            ("Enter", x0 - 4, 292, 58, 24),
+            ("Right", x0, 326, 50, 18),
+            ("Del", x0, 388, 50, 20),
+        ]
+
+    def _draw_home_icon(self, x: int, y: int, w: int, live: bool, connected: bool) -> None:
+        frame = TEXT if live else TEXT_DIM
+        inner = SURFACE if live else BG
+        accent = PURPLE if connected else (GREEN if live else TEXT_DIM)
+        screen_w = min(76, w - 48)
+        screen_h = 42
+        screen_x = x + (w - screen_w) // 2
+        screen_y = y
+        self.fb.fill_rect(screen_x, screen_y, screen_w, screen_h, frame)
+        self.fb.fill_rect(screen_x + 3, screen_y + 3, screen_w - 6, screen_h - 6, inner)
+        self.fb.fill_rect(screen_x + screen_w // 2 - 3, screen_y + screen_h, 6, 12, frame)
+        self.fb.fill_rect(screen_x + screen_w // 2 - 18, screen_y + screen_h + 12, 36, 4, frame)
+        self.fb.fill_rect(screen_x + 8, screen_y + 8, screen_w - 16, 4, accent)
+        self.fb.fill_rect(screen_x + 8, screen_y + 16, screen_w - 26, 4, frame)
+        self.fb.fill_rect(screen_x + 8, screen_y + 24, screen_w - 34, 4, frame)
+
+    def _home_tile_style(self, host: Host) -> tuple[tuple, tuple, tuple]:
+        border_color = PURPLE if host.connected else BORDER
+        fill_color = SURFACE if host.live else BORDER
+        name_color = TEXT if host.live else TEXT_DIM
+        return border_color, fill_color, name_color
+
+    def _draw_home_legend(self) -> None:
+        rail_x = FB_WIDTH - 20
+        self.fb.fill_rect(rail_x, 110, 2, 314, BORDER)
+        for label, x, y, w, h in self._home_legend_layout():
+            border = PURPLE if label in ("Menu", "Enter") else BORDER
+            fill = SURFACE
+            text = TEXT if label in ("Menu", "Enter") else TEXT_DIM
+            self.fb.fill_rect(x, y, w, h, border)
+            self.fb.fill_rect(x + 1, y + 1, w - 2, h - 2, fill)
+            if label in ("Menu", "Enter"):
+                self.fb.fill_rect(rail_x - 2, y, 4, h, PURPLE)
+            text_x = x + max(0, (w - self._text_width(label, scale=1, spacing=1)) // 2)
+            text_y = y + max(0, (h - 8) // 2)
+            self.fb.draw_text(text_x, text_y, label, text, scale=1)
 
     def toggle(self) -> None:
         self.visible = not self.visible
@@ -686,8 +861,34 @@ class MenuUI:
             self.draw_idle()
 
     def draw_idle(self) -> None:
-        if not self.fb.blit_logo():
-            self.fb.clear(BG)
+        self._clear_expired_status()
+        self.fb.clear(BG)
+        self._draw_centered_logo(22, scale=2, spacing=1)
+        self._draw_centered_text(62, "Bluetooth mic + keyboard. no setup, just talk.", TEXT, scale=1, spacing=1)
+        self.fb.fill_rect(20, 112, FB_WIDTH - 40, 4, PURPLE)
+        self._draw_centered_text(128, "hosts", TEXT_DIM, scale=1, spacing=1)
+
+        if not self.hosts:
+            self._draw_centered_text(240, "no remembered hosts yet", TEXT_DIM, scale=1)
+
+        for host, x, y, tile_w, tile_h in self._home_layout():
+            border_color, fill_color, name_color = self._home_tile_style(host)
+            self.fb.fill_rect(x, y, tile_w, tile_h, border_color)
+            inset = 3 if host.connected else 1
+            self.fb.fill_rect(x + inset, y + inset, tile_w - inset * 2, tile_h - inset * 2, fill_color)
+            if host.connected:
+                self.fb.fill_rect(x + tile_w - 24, y + 10, 12, 12, PURPLE)
+            elif host.live:
+                self.fb.fill_rect(x + tile_w - 20, y + 10, 8, 8, GREEN)
+            self._draw_home_icon(x, y + 18, tile_w, host.live, host.connected)
+            name = (host.name[:16] + "...") if len(host.name) > 19 else host.name
+            name_x = x + max(0, (tile_w - self._text_width(name, scale=1, spacing=1)) // 2)
+            self.fb.draw_text(name_x, y + tile_h - 28, name, name_color, scale=1)
+
+        self._draw_home_legend()
+
+        if self.home_status:
+            self._draw_centered_text(FB_HEIGHT - 28, self.home_status[:56], TEXT_DIM, scale=1)
         self.fb.present()
 
     def draw(self) -> None:
@@ -697,7 +898,7 @@ class MenuUI:
         # Header bar
         self.fb.fill_rect(0, 0, FB_WIDTH, 72, SURFACE)
         self.fb.fill_rect(0, 0, FB_WIDTH, 6, PURPLE)
-        self.fb.draw_text(20, 18, "spotifone", TEXT, scale=2, spacing=1)
+        self._draw_logo(20, 18, scale=2, spacing=1)
         self.fb.draw_text(20, 52, "no setup. just talk.", TEXT_DIM, scale=1, spacing=1)
 
         # Close button (X)
@@ -812,8 +1013,8 @@ class MenuUI:
         return False
 
     def _attempt_connect_device(self, mac: str) -> None:
-        self.last_error = "connecting..."
-        self.draw()
+        self._set_status("connecting...", duration_s=8.0)
+        self.draw_current()
 
         ok = False
         try:
@@ -824,13 +1025,17 @@ class MenuUI:
         if not ok:
             ok = self._connect_via_bluetoothctl(mac)
 
-        self.last_error = "connected" if ok else "connect failed (pairing mode?)"
+        self._set_status("connected" if ok else "connect failed (pairing mode?)", duration_s=2.5)
         time.sleep(0.3)
         self.refresh_hosts()
-        self.draw()
+        self.draw_current()
 
     def on_tap(self, x: int, y: int) -> None:
         if not self.visible:
+            for host, tile_x, tile_y, tile_w, tile_h in self._home_layout():
+                if tile_x <= x <= tile_x + tile_w and tile_y <= y <= tile_y + tile_h:
+                    self._attempt_connect_device(host.mac)
+                    return
             return
 
         # Confirm delete overlay has priority
@@ -871,12 +1076,7 @@ class MenuUI:
                     self.draw()
                     return
                 # Connect
-                ok = dbus_connect(h.mac)
-                if not ok:
-                    self.last_error = "connect failed"
-                time.sleep(0.2)
-                self.refresh_hosts()
-                self.draw()
+                self._attempt_connect_device(h.mac)
                 return
 
         # Scan button
@@ -941,6 +1141,7 @@ def main() -> int:
     ui = MenuUI()
     ui.fb.open()
     ui.touch.open()
+    ui.refresh_hosts()
     ui.draw_idle()
 
     last_refresh = 0.0
@@ -955,12 +1156,14 @@ def main() -> int:
         except InterruptedError:
             continue
 
-        # Periodic refresh when visible (connected status can change).
+        # Periodic refresh for the home surface and settings overlay.
         now = time.time()
-        if ui.visible and (now - last_refresh) > 2.0 and not ui.confirm_delete:
+        if (now - last_refresh) > 2.0 and not ui.confirm_delete:
             ui.refresh_hosts()
-            ui.draw()
+            ui.draw_current()
             last_refresh = now
+        if not ui.visible:
+            ui._start_live_probe()
 
         if menu_sock in ready:
             try:
@@ -979,4 +1182,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

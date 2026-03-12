@@ -118,6 +118,47 @@
 - [ ] Verification on device
   - Acceptance: manual test checklist completed (toggle menu, connect/delete host, scan page, close menu, PTT + wheel app-switch still work)
 
+## Phase 5: Home Surface Host Menu
+- [x] Write SDD: home host-switching surface
+  - Acceptance: defines header copy, list layout, host source-of-truth, liveness model, tap behavior, and fallback behavior
+- [x] Replace passive idle splash with branded home menu
+  - Acceptance: logo stays visible; header copy is `Bluetooth mic + keyboard. no setup, just talk.`
+  - Acceptance: a purple divider line separates the header from the host list
+- [x] Render remembered Bluetooth hosts on the home surface
+  - Acceptance: uses remembered BlueZ hosts as the source of truth for "ever connected"
+  - Acceptance: live/connected hosts render bright; offline hosts render muted/grey
+- [x] Support tap-to-switch from the home surface
+  - Acceptance: tapping a remembered host attempts to connect/switch to that host
+  - Acceptance: status/error feedback renders on-screen without breaking the existing mute-button settings overlay
+- [x] Verification
+  - Acceptance: unit tests cover host liveness/state mapping
+  - Acceptance: local suite passes via `python3 -m unittest discover -s tests -v` because `pytest` is not installed in this environment
+
+## Phase 5a: Home Surface Icon Grid Refresh
+- [x] Update home host menu layout to a 2-column icon grid
+  - Acceptance: each host renders as an icon/tile instead of a text row
+  - Acceptance: layout feels closer to an iOS-style home screen than a list
+- [x] Remove MAC addresses from the primary home surface
+  - Acceptance: host names remain visible; MAC addresses are not rendered on the idle/home UI
+- [x] Verification
+  - Acceptance: tests cover 2-column home tile layout and tap routing
+
+## Phase 5b: Connected Host Highlight
+- [x] Highlight the current connected host with a purple rectangle
+  - Acceptance: the active home tile uses a clear purple outline rather than a small indicator
+- [x] Move the highlight after host switch
+  - Acceptance: after tapping another host and connect succeeds, the new connected host becomes the highlighted tile
+- [x] Verification
+  - Acceptance: tests cover connected-tile highlight state logic
+
+## Phase 5c: Home Surface Key Legend
+- [x] Add right-side key legend to the home surface
+  - Acceptance: right edge shows five small vertical labels: `Left`, `Right`, `Del`, `Enter`, `Menu`
+- [x] Preserve host grid usability with legend present
+  - Acceptance: host tiles remain in a 2-column layout and do not overlap the legend rail
+- [x] Verification
+  - Acceptance: tests cover legend layout and 2-column host layout with legend reserved
+
 ## Open Bugs
 - [x] **BUG: Runtime logo/background shows color noise ("static")** — Three root causes found and fixed:
   1. OSD plane starts disabled after boot (`osd[0] enable: 0`). Fix: `FBIOBLANK(0)` ioctl to unblank.
@@ -136,9 +177,9 @@
 - Mac can discover, pair, and use Spotifone as microphone
 
 ## Review
-- Tests run: 86
-- Outcomes: 86 passed, 0 failed (pytest 9.0.2, Python 3.14.3)
-- Known limitations: C daemons are structural stubs (IPC + signal handling only, no BlueZ/ALSA integration yet).
+- Tests run: 144
+- Outcomes: 144 passed, 0 failed (`python3 -m unittest discover -s tests -v`). `pytest` is unavailable in this local environment.
+- Known limitations: C daemons are structural stubs (IPC + signal handling only, no BlueZ/ALSA integration yet). Home-surface live/offline state is based on periodic Bluetooth discovery plus connected state, not a separate historical presence database.
 - Device access: ADB over USB (serial 12345678). SSH not yet working (sshd privilege separation issue).
 - Boot mode: Debian is default boot. Stock Buildroot available via burn mode + env override.
 - USB gadget: RNDIS + ADB. macOS RNDIS doesn't work (inactive link), but ADB works fine.
