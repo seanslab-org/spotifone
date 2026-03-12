@@ -143,8 +143,8 @@ def render_canvas() -> Image.Image:
 
     title_font = find_font(SANS_FONT_PATHS, 74, bold=True)
     tagline_font = find_font(SANS_FONT_PATHS, 26, bold=False)
-    mono_font = find_font(MONO_FONT_PATHS, 22, bold=False)
     small_font = find_font(SANS_FONT_PATHS, 20, bold=False)
+    label_font = find_font(MONO_FONT_PATHS, 16, bold=False)
 
     # Hero title with purple accent on "one" (walkie-style span)
     left = "spotif"
@@ -163,24 +163,44 @@ def render_canvas() -> Image.Image:
     draw.text((_center_x(draw, tagline_1, tagline_font), 235), tagline_1, fill=MUTED, font=tagline_font)
     draw.text((_center_x(draw, tagline_2, tagline_font), 268), tagline_2, fill=MUTED, font=tagline_font)
 
-    # "Install box" equivalent with key hints (monospace)
-    box_w = 420
-    box_h = 140
-    box_x0 = (FB_WIDTH - box_w) // 2
-    box_y0 = 340
-    draw.rectangle((box_x0, box_y0, box_x0 + box_w, box_y0 + box_h), fill=SURFACE, outline=BORDER, width=1)
-    # Small accent rule inside the box
-    draw.rectangle((box_x0, box_y0, box_x0 + box_w, box_y0 + 4), fill=ACCENT)
-
-    hints = [
-        "$ mute  -> menu",
-        "$ wheel -> app switch",
-        "$ round -> ptt",
+    # Side button labels — slim vertical text on right edge.
+    # Y positions from stock Spotify UI: preset indicators at 200px intervals
+    # across 800px landscape width, mapping 1:1 to portrait Y after 90° CW rotation.
+    button_labels = [
+        ("LEFT",   100),   # Preset 1
+        ("RIGHT",  300),   # Preset 2
+        ("DEL",    500),   # Preset 3
+        ("ENTER",  700),   # Preset 4
+        ("MENU",   760),   # Mute button (recessed, near dial)
     ]
-    hy = box_y0 + 28
-    for line in hints:
-        draw.text((box_x0 + 22, hy), line, fill=TEXT, font=mono_font)
-        hy += 34
+
+    # Thin accent rail on far right edge
+    draw.rectangle((FB_WIDTH - 2, 60, FB_WIDTH - 1, 790), fill=BORDER)
+
+    for label, cy in button_labels:
+        # Render text horizontally onto temp RGBA image
+        bbox = draw.textbbox((0, 0), label, font=label_font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        pad = 4
+        tmp = Image.new("RGBA", (tw + pad, th + pad), (0, 0, 0, 0))
+        tmp_draw = ImageDraw.Draw(tmp)
+        tmp_draw.text((pad // 2 - bbox[0], pad // 2 - bbox[1]), label, fill=MUTED, font=label_font)
+
+        # Rotate 90° CW → text reads top-to-bottom on right edge
+        rotated = tmp.rotate(270, expand=True)
+
+        # Position: near right edge, vertically centered on button Y
+        rx = FB_WIDTH - rotated.width - 6
+        ry = cy - rotated.height // 2
+        canvas.paste(rotated, (rx, ry), rotated)
+
+        # Purple accent tick on the rail
+        draw.rectangle((FB_WIDTH - 3, cy - 3, FB_WIDTH - 1, cy + 3), fill=ACCENT)
+
+    # Front control hints (left side, below taglines)
+    draw.text((30, 350), "round = ptt", fill=MUTED, font=small_font)
+    draw.text((30, 380), "wheel = switch", fill=MUTED, font=small_font)
 
     # Footer (muted)
     footer = "https://seanslab.org"

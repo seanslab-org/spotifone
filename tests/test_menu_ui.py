@@ -103,26 +103,27 @@ class TestMenuUIHomeStyle(unittest.TestCase):
     def test_home_legend_contains_requested_items(self):
         ui = MenuUI()
         labels = [item[0] for item in ui._home_legend_layout()]
-        self.assertEqual(labels, ["Menu", "Left", "Enter", "Right", "Del"])
+        self.assertEqual(labels, ["Left", "Right", "Del", "Enter", "Menu"])
 
     def test_home_legend_uses_vertical_rail(self):
         ui = MenuUI()
         legend = {label: (x, y, w, h) for label, x, y, w, h in ui._home_legend_layout()}
-        self.assertLess(legend["Menu"][1], legend["Left"][1])
-        self.assertLess(legend["Left"][1], legend["Enter"][1])
-        self.assertLess(legend["Enter"][1], legend["Right"][1])
+        # Physical button order top-to-bottom: Left, Right, Del, Enter, Menu
+        self.assertLess(legend["Left"][1], legend["Right"][1])
         self.assertLess(legend["Right"][1], legend["Del"][1])
+        self.assertLess(legend["Del"][1], legend["Enter"][1])
+        self.assertLess(legend["Enter"][1], legend["Menu"][1])
+        # X positions aligned (all same x for slim vertical layout)
         self.assertLessEqual(abs(legend["Left"][0] - legend["Right"][0]), 4)
         self.assertLessEqual(abs(legend["Menu"][0] - legend["Left"][0]), 4)
         self.assertLessEqual(abs(legend["Right"][0] - legend["Del"][0]), 4)
-        self.assertLessEqual(legend["Left"][2], 58)
-        self.assertLessEqual(legend["Right"][2], 58)
-        self.assertLessEqual(legend["Del"][2], 58)
-        self.assertLessEqual(legend["Enter"][2], 60)
-        self.assertLessEqual(legend["Menu"][2], 58)
-        self.assertGreaterEqual(legend["Left"][0], 416)
-        self.assertLessEqual(legend["Menu"][1], 132)
-        self.assertGreaterEqual(legend["Del"][1], 380)
+        # Slim widths (vertical text is narrow)
+        for lbl in ("Left", "Right", "Del", "Enter", "Menu"):
+            self.assertLessEqual(legend[lbl][2], 20)
+        # Right-aligned near edge, matching physical positions
+        self.assertGreaterEqual(legend["Left"][0], 456)
+        self.assertLessEqual(legend["Left"][1], 110)
+        self.assertGreaterEqual(legend["Menu"][1], 750)
 
 
 if __name__ == "__main__":

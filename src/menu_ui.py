@@ -79,7 +79,7 @@ GREEN = (0x2A, 0xC8, 0x2A, 0xFF)    # muted-ish green
 HOME_LIVE_SCAN_INTERVAL_S = 20.0
 HOME_LIVE_SCAN_TIMEOUT_S = 4
 HOME_GRID_COLUMNS = 2
-HOME_LEGEND_WIDTH = 72
+HOME_LEGEND_WIDTH = 28
 
 # IPC commands (1 byte)
 CMD_TOGGLE = 0x01
@@ -429,6 +429,29 @@ class Framebuffer:
                     px = x + (7 - col) * scale
                     py = y + row_idx * scale
                     self.fill_rect(px, py, scale, scale, color)
+
+    def draw_char_rotcw(self, x: int, y: int, ch: str, color: tuple, scale: int = 1) -> None:
+        """Draw a single character rotated 90 degrees clockwise."""
+        if not ch or ch[0] == " ":
+            return
+        code = ord(ch[0]) & 0x7F
+        if code >= len(FONT8X8_BASIC) or FONT8X8_BASIC[code] == [0x00] * 8:
+            code = 0x3F
+        glyph = FONT8X8_BASIC[code]
+        for row_idx in range(8):
+            bits = glyph[row_idx]
+            for col in range(8):
+                if bits & (1 << col):
+                    px = x + (7 - row_idx) * scale
+                    py = y + (7 - col) * scale
+                    self.fill_rect(px, py, scale, scale, color)
+
+    def draw_text_vertical(self, x: int, y: int, text: str, color: tuple, scale: int = 1, spacing: int = 1) -> None:
+        """Draw text vertically (each char rotated 90 CW), reading top-to-bottom."""
+        cy = y
+        for ch in text:
+            self.draw_char_rotcw(x, cy, ch, color, scale=scale)
+            cy += (8 * scale) + spacing
 
     def draw_text(self, x: int, y: int, text: str, color: tuple, scale: int = 1, spacing: int = 1) -> None:
         cx = x
@@ -803,13 +826,15 @@ class MenuUI:
         return layout
 
     def _home_legend_layout(self) -> list[tuple[str, int, int, int, int]]:
-        x0 = FB_WIDTH - 58
+        # Physical button order top-to-bottom: preset1, preset2, preset3, preset4, mute.
+        # Y positions from stock Spotify UI (200px intervals in landscape → portrait Y).
+        x0 = FB_WIDTH - 18
         return [
-            ("Menu", x0, 120, 50, 20),
-            ("Left", x0, 264, 50, 18),
-            ("Enter", x0 - 4, 292, 58, 24),
-            ("Right", x0, 326, 50, 18),
-            ("Del", x0, 388, 50, 20),
+            ("Left",  x0, 100, 14, 18),
+            ("Right", x0, 300, 14, 18),
+            ("Del",   x0, 500, 14, 20),
+            ("Enter", x0, 700, 14, 24),
+            ("Menu",  x0, 760, 14, 20),
         ]
 
     def _draw_home_icon(self, x: int, y: int, w: int, live: bool, connected: bool) -> None:
@@ -835,19 +860,17 @@ class MenuUI:
         return border_color, fill_color, name_color
 
     def _draw_home_legend(self) -> None:
-        rail_x = FB_WIDTH - 20
-        self.fb.fill_rect(rail_x, 110, 2, 314, BORDER)
-        for label, x, y, w, h in self._home_legend_layout():
-            border = PURPLE if label in ("Menu", "Enter") else BORDER
-            fill = SURFACE
-            text = TEXT if label in ("Menu", "Enter") else TEXT_DIM
-            self.fb.fill_rect(x, y, w, h, border)
-            self.fb.fill_rect(x + 1, y + 1, w - 2, h - 2, fill)
-            if label in ("Menu", "Enter"):
-                self.fb.fill_rect(rail_x - 2, y, 4, h, PURPLE)
-            text_x = x + max(0, (w - self._text_width(label, scale=1, spacing=1)) // 2)
-            text_y = y + max(0, (h - 8) // 2)
-            self.fb.draw_text(text_x, text_y, label, text, scale=1)
+        # Slim vertical rail with rotated text labels — matches wallpaper style.
+        rail_x = FB_WIDTH - 2
+        self.fb.fill_rect(rail_x, 60, 2, 730, BORDER)
+        for label, x, cy, _w, _h in self._home_legend_layout():
+            color = TEXT if label in ("Menu", "Enter") else TEXT_DIM
+            # Vertical text centered on button Y position
+            text_h = len(label) * 9 - 1  # 8px per char + 1px spacing
+            text_y = cy - text_h // 2
+            self.fb.draw_text_vertical(x - 8, text_y, label, color, scale=1, spacing=1)
+            # Purple accent tick on the rail
+            self.fb.fill_rect(rail_x - 1, cy - 3, 3, 6, PURPLE)
 
     def toggle(self) -> None:
         self.visible = not self.visible

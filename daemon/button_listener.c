@@ -331,7 +331,7 @@ int main(void) {
         log_info("Listening on /dev/input/event1 (knob)");
     }
     log_info("Round button -> Right Alt (0xE6) + PTT");
-    log_info("Preset #1-4 -> Left / Right / Enter / Delete");
+    log_info("Preset #1-4 -> Left / Right / Delete / Enter");
     log_info("Mute button -> Menu toggle");
     log_info("Knob click -> macOS app switcher (Cmd+Tab hold, rotate=Tab, click=release)");
 
@@ -418,15 +418,15 @@ int main(void) {
                         }
                     } else if (ev.code == PRESET_3_CODE) {
                         if (ev.value == 1) {
-                            (void)send_hid_event(hid_sock, &hid_addr, HID_ENTER, 1);
-                        } else if (ev.value == 0) {
-                            (void)send_hid_event(hid_sock, &hid_addr, HID_ENTER, 0);
-                        }
-                    } else if (ev.code == PRESET_4_CODE) {
-                        if (ev.value == 1) {
                             (void)send_hid_event(hid_sock, &hid_addr, HID_BACKSPACE, 1);
                         } else if (ev.value == 0) {
                             (void)send_hid_event(hid_sock, &hid_addr, HID_BACKSPACE, 0);
+                        }
+                    } else if (ev.code == PRESET_4_CODE) {
+                        if (ev.value == 1) {
+                            (void)send_hid_event(hid_sock, &hid_addr, HID_ENTER, 1);
+                        } else if (ev.value == 0) {
+                            (void)send_hid_event(hid_sock, &hid_addr, HID_ENTER, 0);
                         }
                     } else if (ev.code == MUTE_BUTTON_CODE && ev.value == 1) {
                         /* Phase 2: menu toggle is the ONLY new button behavior. */

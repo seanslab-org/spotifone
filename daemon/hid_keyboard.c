@@ -31,6 +31,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #define BLUEZ_SERVICE "org.bluez"
@@ -130,6 +131,31 @@ static int g_ipc_fd = -1;
 static int g_intr_listen_fd = -1;
 static uint8_t g_modifiers = 0;
 static int g_logged_no_intr = 0;
+
+/* Deferred HID connect: triggered by D-Bus Connected signal */
+static uint8_t g_pending_bdaddr[6];
+static long long g_pending_connect_ms = 0;
+#define HID_CONNECT_DELAY_MS 1500
+
+static long long monotonic_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000LL + (long long)ts.tv_nsec / 1000000LL;
+}
+
+/* Parse BD address from D-Bus device path like /org/bluez/hci0/dev_D0_11_E5_70_6E_B5 */
+static int parse_bdaddr_from_path(const char *path, uint8_t *out) {
+    const char *dev = strstr(path, "/dev_");
+    if (!dev) return -1;
+    dev += 5; /* skip "/dev_" */
+    unsigned int b[6];
+    if (sscanf(dev, "%02x_%02x_%02x_%02x_%02x_%02x",
+               &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) != 6) {
+        return -1;
+    }
+    for (int i = 0; i < 6; i++) out[i] = (uint8_t)b[i];
+    return 0;
+}
 
 static void log_info(const char *fmt, ...) {
     va_list ap;
@@ -619,6 +645,79 @@ static int setup_ipc_socket(void) {
     return fd;
 }
 
+/* D-Bus signal filter: watch for Device1.Connected=true to auto-trigger HID connect.
+ * When a paired device connects (e.g. macOS reconnects HFP), BlueZ emits
+ * PropertiesChanged with Connected=true. If we don't have HID channels up,
+ * schedule a deferred outbound HID connect to that device. */
+static DBusHandlerResult signal_filter(DBusConnection *connection, DBusMessage *message, void *user_data) {
+    (void)connection;
+    (void)user_data;
+
+    if (!dbus_message_is_signal(message, "org.freedesktop.DBus.Properties", "PropertiesChanged"))
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+
+    const char *path = dbus_message_get_path(message);
+    if (!path || !strstr(path, "/dev_"))
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+
+    DBusMessageIter args;
+    if (!dbus_message_iter_init(message, &args))
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+
+    /* First arg: interface name (string) */
+    if (dbus_message_iter_get_arg_type(&args) != DBUS_TYPE_STRING)
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+
+    const char *iface;
+    dbus_message_iter_get_basic(&args, &iface);
+    if (strcmp(iface, "org.bluez.Device1") != 0)
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+
+    /* Second arg: changed properties dict a{sv} */
+    if (!dbus_message_iter_next(&args))
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    if (dbus_message_iter_get_arg_type(&args) != DBUS_TYPE_ARRAY)
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+
+    DBusMessageIter dict;
+    dbus_message_iter_recurse(&args, &dict);
+
+    while (dbus_message_iter_get_arg_type(&dict) == DBUS_TYPE_DICT_ENTRY) {
+        DBusMessageIter entry, variant;
+        dbus_message_iter_recurse(&dict, &entry);
+
+        if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_STRING) {
+            dbus_message_iter_next(&dict);
+            continue;
+        }
+
+        const char *key;
+        dbus_message_iter_get_basic(&entry, &key);
+
+        if (strcmp(key, "Connected") == 0 && dbus_message_iter_next(&entry)) {
+            dbus_message_iter_recurse(&entry, &variant);
+            if (dbus_message_iter_get_arg_type(&variant) == DBUS_TYPE_BOOLEAN) {
+                dbus_bool_t connected;
+                dbus_message_iter_get_basic(&variant, &connected);
+
+                if (connected && g_intr_fd < 0) {
+                    uint8_t bdaddr[6];
+                    if (parse_bdaddr_from_path(path, bdaddr) == 0) {
+                        log_info("Device connected (D-Bus): %02X:%02X:%02X:%02X:%02X:%02X — scheduling HID connect",
+                                 bdaddr[0], bdaddr[1], bdaddr[2], bdaddr[3], bdaddr[4], bdaddr[5]);
+                        memcpy(g_pending_bdaddr, bdaddr, 6);
+                        g_pending_connect_ms = monotonic_ms() + HID_CONNECT_DELAY_MS;
+                    }
+                }
+            }
+        }
+
+        dbus_message_iter_next(&dict);
+    }
+
+    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+}
+
 int main(void) {
     DBusError err;
     DBusObjectPathVTable profile_vtable = {.message_function = profile_message_handler};
@@ -642,6 +741,18 @@ int main(void) {
     if (register_hid_profile() < 0) {
         return 1;
     }
+
+    /* Watch for Device1.Connected property changes to auto-trigger HID connect */
+    dbus_bus_add_match(g_conn,
+        "type='signal',interface='org.freedesktop.DBus.Properties',"
+        "member='PropertiesChanged',arg0='org.bluez.Device1'",
+        &err);
+    if (dbus_error_is_set(&err)) {
+        log_error("D-Bus match add failed: %s", err.message);
+        dbus_error_free(&err);
+        /* Non-fatal: auto-connect won't work but manual IPC still does */
+    }
+    dbus_connection_add_filter(g_conn, signal_filter, NULL, NULL);
 
     g_ipc_fd = setup_ipc_socket();
     if (g_ipc_fd < 0) {
@@ -704,6 +815,18 @@ int main(void) {
         dbus_connection_read_write(g_conn, 0);
         while (dbus_connection_dispatch(g_conn) == DBUS_DISPATCH_DATA_REMAINS) {
             /* drain queue */
+        }
+
+        /* Deferred HID connect: triggered by D-Bus Connected signal */
+        if (g_pending_connect_ms > 0 && g_intr_fd < 0) {
+            long long now = monotonic_ms();
+            if (now >= g_pending_connect_ms) {
+                g_pending_connect_ms = 0;
+                connect_hid_to_host(g_pending_bdaddr);
+            }
+        } else if (g_pending_connect_ms > 0 && g_intr_fd >= 0) {
+            /* HID already connected (e.g. via IPC or NewConnection), cancel pending */
+            g_pending_connect_ms = 0;
         }
     }
 
