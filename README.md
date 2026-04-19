@@ -376,4 +376,4 @@ Some critical gotchas from development (full list in `tasks/lessons.md`):
 
 ## License
 
-This project is for personal/educational use. Spotify Car Thing hardware modifications are at your own risk.
+MIT License — see `LICENSE` file. Spotify Car Thing hardware modifications are at your own risk.
